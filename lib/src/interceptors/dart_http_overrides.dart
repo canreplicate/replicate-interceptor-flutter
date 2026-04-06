@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
+import '../intercept_player.dart';
 import '../network_event.dart';
 import '../simvault_client.dart';
 
@@ -50,7 +52,9 @@ class _SimVaultHttpClient implements HttpClient {
     String url,
   ) async {
     final req = await future;
-    return _SimVaultHttpClientRequest(req, _simvault, method, url);
+    // Pass _inner (the real unwrapped HttpClient) so _sendWithOverriddenBody
+    // can open a fresh connection without going through HttpOverrides again.
+    return _SimVaultHttpClientRequest(req, _simvault, method, url, _inner);
   }
 
   // ---- Request factories ----
@@ -199,6 +203,9 @@ class _SimVaultHttpClientRequest implements HttpClientRequest {
   final NetworkEventSink _simvault;
   final String _method;
   final String _url;
+  // The real (unwrapped) HttpClient — used by _sendWithOverriddenBody to avoid
+  // re-entering HttpOverrides.global and causing infinite recursion.
+  final HttpClient _rawClient;
 
   final String _id = const Uuid().v4();
   final String _timestamp = DateTime.now().toIso8601String();
@@ -209,7 +216,7 @@ class _SimVaultHttpClientRequest implements HttpClientRequest {
   Future<HttpClientResponse>? _closeFuture;
 
   _SimVaultHttpClientRequest(
-      this._inner, this._simvault, this._method, this._url);
+      this._inner, this._simvault, this._method, this._url, this._rawClient);
 
   // ---- Body interception ----
 
@@ -263,12 +270,35 @@ class _SimVaultHttpClientRequest implements HttpClientRequest {
   }
 
   Future<HttpClientResponse> _doClose() async {
-    // In replay mode: return recorded response without touching the network.
     if (_simvault is SimVaultClient) {
-      final recorded = (_simvault as SimVaultClient).replay(_method, _url);
-      if (recorded != null) {
-        _inner.abort();
-        return _SimVaultReplayResponse(recorded);
+      final client = _simvault as SimVaultClient;
+
+      // In replay mode: return recorded response without touching the network.
+      if (client.isReplayMode) {
+        final recorded = client.replay(_method, _url);
+        if (recorded != null) {
+          _inner.abort();
+          return _SimVaultReplayResponse(recorded);
+        }
+      }
+
+      // In intercept mode: optionally replace request body, then apply response overrides.
+      if (client.isInterceptMode) {
+        final override = client.intercept(_method, _url);
+        if (override != null && override.requestBodyOverride != null) {
+          // dart:io doesn't let us rewrite bytes already written to _inner.
+          // Abort this request and open a fresh one with the overridden body.
+          _inner.abort();
+          final overrideResponse = await _sendWithOverriddenBody(override);
+          if (overrideResponse != null) return overrideResponse;
+          // If that fails, fall through to original request (already aborted —
+          // surface as a network error by rethrowing below).
+        } else if (override != null && override.hasResponseOverride) {
+          // No request change — send normally, wrap response on the way back.
+          final response = await _inner.close();
+          _stopwatch.stop();
+          return _SimVaultInterceptResponse(response, override);
+        }
       }
     }
 
@@ -301,6 +331,43 @@ class _SimVaultHttpClientRequest implements HttpClientRequest {
       reqHeaders,
       requestBody,
     );
+  }
+
+  /// Opens a brand-new [HttpClientRequest] to the same URL with the overridden
+  /// body and returns the response (with optional response overrides applied).
+  ///
+  /// Uses [_rawClient] (the real, unwrapped [HttpClient]) so that the new
+  /// request does NOT re-enter [HttpOverrides.global] and cause infinite
+  /// recursion.
+  Future<HttpClientResponse?> _sendWithOverriddenBody(TapeOverride override) async {
+    try {
+      final uri = Uri.parse(_url);
+      // Use the raw (unwrapped) client — NOT HttpClient() which would go through
+      // HttpOverrides.global again and re-trigger this same intercept path.
+      final newRequest = await _rawClient.openUrl(_method, uri);
+
+      // Copy headers from original request.
+      _inner.headers.forEach((name, values) {
+        for (final v in values) {
+          newRequest.headers.add(name, v);
+        }
+      });
+
+      final bodyBytes = utf8.encode(override.requestBodyOverride!);
+      newRequest.contentLength = bodyBytes.length;
+      newRequest.add(bodyBytes);
+
+      final response = await newRequest.close();
+      // Do NOT close _rawClient — it is shared and managed by _SimVaultHttpClient.
+
+      if (override.hasResponseOverride) {
+        return _SimVaultInterceptResponse(response, override);
+      }
+      return response;
+    } catch (e) {
+      print('[SimVault] ❌ dart:io intercept body override failed: $e');
+      return null;
+    }
   }
 
   @override
@@ -491,6 +558,88 @@ class _SimVaultHttpClientResponse extends Stream<List<int>>
 
   @override
   int get statusCode => _inner.statusCode;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _SimVaultInterceptResponse
+// Wraps a real HttpClientResponse but overrides status code and/or body bytes
+// when a TapeOverride specifies them. Used in intercept mode.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SimVaultInterceptResponse extends Stream<List<int>>
+    implements HttpClientResponse {
+  final HttpClientResponse _inner;
+  final TapeOverride _override;
+  late final List<int> _overrideBytes;
+
+  _SimVaultInterceptResponse(this._inner, this._override) {
+    _overrideBytes = _override.responseBodyOverride != null
+        ? utf8.encode(_override.responseBodyOverride!)
+        : [];
+  }
+
+  @override
+  int get statusCode => _override.statusCodeOverride ?? _inner.statusCode;
+
+  @override
+  String get reasonPhrase => _inner.reasonPhrase;
+
+  @override
+  int get contentLength =>
+      _override.responseBodyOverride != null ? _overrideBytes.length : _inner.contentLength;
+
+  @override
+  HttpHeaders get headers => _inner.headers;
+
+  @override
+  bool get persistentConnection => _inner.persistentConnection;
+
+  @override
+  bool get isRedirect => _inner.isRedirect;
+
+  @override
+  List<RedirectInfo> get redirects => _inner.redirects;
+
+  @override
+  List<Cookie> get cookies => _inner.cookies;
+
+  @override
+  X509Certificate? get certificate => _inner.certificate;
+
+  @override
+  HttpConnectionInfo? get connectionInfo => _inner.connectionInfo;
+
+  @override
+  HttpClientResponseCompressionState get compressionState =>
+      _inner.compressionState;
+
+  @override
+  Future<Socket> detachSocket() => _inner.detachSocket();
+
+  @override
+  Future<HttpClientResponse> redirect([String? method, Uri? url, bool? followLoops]) =>
+      _inner.redirect(method, url, followLoops);
+
+  @override
+  StreamSubscription<List<int>> listen(
+    void Function(List<int>)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    if (_override.responseBodyOverride != null) {
+      // Drain real response to avoid connection leaks, then emit override bytes.
+      _inner.listen((_) {}, onDone: () {});
+      return Stream.value(_overrideBytes).listen(
+        onData,
+        onError: onError,
+        onDone: onDone,
+        cancelOnError: cancelOnError,
+      );
+    }
+    return _inner.listen(onData,
+        onError: onError, onDone: onDone, cancelOnError: cancelOnError);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

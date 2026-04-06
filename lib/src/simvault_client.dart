@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'intercept_player.dart';
 import 'network_event.dart';
 import 'tape_player.dart';
 
@@ -22,30 +23,58 @@ class SimVaultClient implements NetworkEventSink {
   bool _disposed = false;
   Timer? _reconnectTimer;
   TapePlayer? _tapePlayer;
+  InterceptPlayer? _interceptPlayer;
+
+  bool _active = false;
 
   bool get isConnected => _connected;
   bool get isReplayMode => _tapePlayer != null;
+  bool get isInterceptMode => _interceptPlayer != null;
+  bool get isActive => _active;
 
-  Future<void> init({required String sessionId, String host = '127.0.0.1', int port = 8889}) async {
+  /// [mode] is `'record'` (default), `'replay'`, or `'intercept'`.
+  /// It is passed from [SimVaultInterceptor.init] which reads it from
+  /// `Documents/simvault_session.json` written by the SimVault desktop app.
+  Future<void> init({
+    required String sessionId,
+    String mode = 'record',
+    String host = '127.0.0.1',
+    int port = 8889,
+  }) async {
     _sessionId = sessionId;
     _host = host;
     _port = port;
     _disposed = false;
+    _active = true;
 
-    final mode = Platform.environment['SIMVAULT_MODE'] ?? 'record';
     if (mode == 'replay') {
-      debugPrint('[SimVaultClient] Replay mode — loading tape, skipping WebSocket');
+      print('🎬 [SimVaultClient] REPLAY MODE — loading tape files');
       _tapePlayer = TapePlayer();
       await _tapePlayer!.load();
       return;
     }
 
+    if (mode == 'intercept') {
+      print('🎯 [SimVaultClient] INTERCEPT MODE — loading override files');
+      _interceptPlayer = InterceptPlayer();
+      await _interceptPlayer!.load();
+      print('🎯 [SimVaultClient] InterceptPlayer loaded. isInterceptMode = $isInterceptMode');
+      return;
+    }
+
+    print('🔴 [SimVaultClient] RECORD MODE — connecting to WebSocket');
     await _connect();
   }
 
   /// Returns the next recorded response for [method] + [url], or null if
   /// no tape entry matches (caller should fall through to real network).
-  NetworkEvent? replay(String method, String url) => _tapePlayer?.play(method, url);
+  NetworkEvent? replay(String method, String url) =>
+      _active ? _tapePlayer?.play(method, url) : null;
+
+  /// Returns the [TapeOverride] for [method] + [url], or null if no override
+  /// exists for this endpoint (caller should proceed with original request).
+  TapeOverride? intercept(String method, String url) =>
+      _active ? _interceptPlayer?.getOverride(method, url) : null;
 
   Future<void> _connect() async {
     if (_disposed) return;
@@ -102,6 +131,8 @@ class SimVaultClient implements NetworkEventSink {
 
   @override
   void sendEvent(NetworkEvent event) {
+    if (!_active) return;
+
     debugPrint('''🚀 SENDING NETWORK EVENT:
   ID: ${event.id}
   ${event.method} ${event.url}

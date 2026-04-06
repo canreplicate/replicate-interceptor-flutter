@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:uuid/uuid.dart';
 
+import '../intercept_player.dart';
 import '../network_event.dart';
 import '../simvault_client.dart';
 
@@ -24,6 +25,7 @@ class SimVaultDioInterceptor extends Interceptor {
   static const _kStart = '_sv_start_ms';
   static const _kId = '_sv_id';
   static const _kTs = '_sv_timestamp';
+  static const _kOverride = '_sv_override';
 
   SimVaultDioInterceptor(this._simvault);
 
@@ -33,23 +35,37 @@ class SimVaultDioInterceptor extends Interceptor {
     options.extra[_kId] = _uuid.v4();
     options.extra[_kTs] = DateTime.now().toIso8601String();
 
-    // In replay mode: resolve with recorded response without hitting the network.
     if (_simvault is SimVaultClient) {
-      final recorded = (_simvault as SimVaultClient)
-          .replay(options.method.toUpperCase(), options.uri.toString());
-      if (recorded != null) {
-        handler.resolve(
-          Response(
-            requestOptions: options,
-            statusCode: recorded.statusCode ?? 200,
-            data: recorded.responseBody,
-            headers: Headers.fromMap(
-              (recorded.responseHeaders ?? {}).map((k, v) => MapEntry(k, [v])),
+      final client = _simvault as SimVaultClient;
+
+      // In replay mode: resolve with recorded response, no real network call.
+      if (client.isReplayMode) {
+        final recorded = client.replay(options.method.toUpperCase(), options.uri.toString());
+        if (recorded != null) {
+          handler.resolve(
+            Response(
+              requestOptions: options,
+              statusCode: recorded.statusCode ?? 200,
+              data: recorded.responseBody,
+              headers: Headers.fromMap(
+                (recorded.responseHeaders ?? {}).map((k, v) => MapEntry(k, [v])),
+              ),
             ),
-          ),
-          true, // callFollowingResponseInterceptor
-        );
-        return;
+            true,
+          );
+          return;
+        }
+      }
+
+      // In intercept mode: optionally modify request body; stash override for onResponse.
+      if (client.isInterceptMode) {
+        final override = client.intercept(options.method.toUpperCase(), options.uri.toString());
+        if (override != null) {
+          options.extra[_kOverride] = override;
+          if (override.requestBodyOverride != null) {
+            options.data = override.requestBodyOverride;
+          }
+        }
       }
     }
 
@@ -59,6 +75,19 @@ class SimVaultDioInterceptor extends Interceptor {
   @override
   void onResponse(Response<dynamic> response, ResponseInterceptorHandler handler) {
     _record(response.requestOptions, response: response);
+
+    // In intercept mode: apply response overrides if present.
+    final override = response.requestOptions.extra[_kOverride] as TapeOverride?;
+    if (override != null && override.hasResponseOverride) {
+      handler.next(Response(
+        requestOptions: response.requestOptions,
+        statusCode: override.statusCodeOverride ?? response.statusCode,
+        data: override.responseBodyOverride ?? response.data,
+        headers: response.headers,
+      ));
+      return;
+    }
+
     handler.next(response);
   }
 

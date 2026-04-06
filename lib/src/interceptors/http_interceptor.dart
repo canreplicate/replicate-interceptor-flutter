@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
+import '../intercept_player.dart';
 import '../network_event.dart';
 import '../simvault_client.dart';
 
@@ -38,15 +39,75 @@ class SimVaultHttpClientWrapper extends http.BaseClient {
 
     // In replay mode: return recorded response without hitting the network.
     if (_simvault is SimVaultClient) {
-      final recorded = (_simvault as SimVaultClient).replay(request.method, request.url.toString());
-      if (recorded != null) {
-        final bytes = utf8.encode(recorded.responseBody ?? '');
-        return http.StreamedResponse(
-          Stream.value(bytes),
-          recorded.statusCode ?? 200,
-          contentLength: bytes.length,
-          headers: recorded.responseHeaders ?? {},
-        );
+      final client = _simvault as SimVaultClient;
+
+      if (client.isReplayMode) {
+        final recorded = client.replay(request.method, request.url.toString());
+        if (recorded != null) {
+          final bytes = utf8.encode(recorded.responseBody ?? '');
+          return http.StreamedResponse(
+            Stream.value(bytes),
+            recorded.statusCode ?? 200,
+            contentLength: bytes.length,
+            headers: recorded.responseHeaders ?? {},
+          );
+        }
+      }
+
+      // In intercept mode: modify request and/or response, always hit real network.
+      if (client.isInterceptMode) {
+        final override = client.intercept(request.method, request.url.toString());
+        print('🎯 [http] intercept ${request.method} ${request.url} → override=$override');
+        if (override != null) {
+          request = _applyRequestOverride(request, override);
+          requestBody = override.requestBodyOverride ?? requestBody;
+        }
+
+        try {
+          final response = await _inner.send(request);
+          final bytes = await response.stream.toBytes();
+          stopwatch.stop();
+
+          String? responseBody;
+          try {
+            responseBody = utf8.decode(bytes);
+          } catch (_) {
+            responseBody = '<binary ${bytes.length} bytes>';
+          }
+
+          _simvault.sendEvent(NetworkEvent(
+            id: id,
+            timestamp: timestamp,
+            method: request.method,
+            url: request.url.toString(),
+            requestHeaders: Map<String, String>.from(request.headers),
+            requestBody: requestBody,
+            statusCode: override?.statusCodeOverride ?? response.statusCode,
+            responseHeaders: Map<String, String>.from(response.headers),
+            responseBody: override?.responseBodyOverride ?? responseBody,
+            durationMs: stopwatch.elapsedMilliseconds,
+            isSuccess: (override?.statusCodeOverride ?? response.statusCode) >= 200 &&
+                (override?.statusCodeOverride ?? response.statusCode) < 300,
+          ));
+
+          final effectiveBytes = override?.responseBodyOverride != null
+              ? utf8.encode(override!.responseBodyOverride!)
+              : bytes;
+
+          return http.StreamedResponse(
+            Stream.value(effectiveBytes),
+            override?.statusCodeOverride ?? response.statusCode,
+            contentLength: effectiveBytes.length,
+            request: response.request,
+            headers: response.headers,
+            isRedirect: response.isRedirect,
+            persistentConnection: response.persistentConnection,
+            reasonPhrase: response.reasonPhrase,
+          );
+        } catch (e, st) {
+          stopwatch.stop();
+          Error.throwWithStackTrace(e, st);
+        }
       }
     }
 
@@ -135,5 +196,17 @@ class SimVaultHttpClientWrapper extends http.BaseClient {
   void close() {
     _inner.close();
     super.close();
+  }
+
+  /// Rebuilds [request] with the request body replaced by [override.requestBodyOverride].
+  /// Only applies to [http.Request] (non-streaming). Streaming requests are returned unchanged.
+  http.BaseRequest _applyRequestOverride(http.BaseRequest request, TapeOverride override) {
+    if (override.requestBodyOverride == null) return request;
+    if (request is! http.Request) return request;
+
+    final modified = http.Request(request.method, request.url)
+      ..headers.addAll(request.headers)
+      ..body = override.requestBodyOverride!;
+    return modified;
   }
 }

@@ -23,7 +23,7 @@ class TapePlayer {
       final tapeDir = Directory('${dir.path}/simvault_tape');
 
       if (!await tapeDir.exists()) {
-        debugPrint('[TapePlayer] simvault_tape/ not found — nothing to load');
+        print('[TapePlayer] ⚠️ simvault_tape/ not found — nothing to load');
         return;
       }
 
@@ -45,7 +45,7 @@ class TapePlayer {
       }
 
       final total = _queues.values.fold(0, (s, q) => s + q.length);
-      debugPrint('[TapePlayer] Loaded $total events across ${_queues.length} endpoints');
+      print('[TapePlayer] ✅ Loaded $total events across ${_queues.length} endpoints');
     } catch (e) {
       debugPrint('[TapePlayer] load() error: $e');
     }

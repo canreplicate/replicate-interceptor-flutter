@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
@@ -57,7 +58,7 @@ class SimVaultHttpClientWrapper extends http.BaseClient {
       // In intercept mode: modify request and/or response, always hit real network.
       if (client.isInterceptMode) {
         final override = client.intercept(request.method, request.url.toString());
-        print('🎯 [http] intercept ${request.method} ${request.url} → override=$override');
+        if (kDebugMode) debugPrint('🎯 [http] intercept ${request.method} ${request.url} → override=$override');
         if (override != null) {
           request = _applyRequestOverride(request, override);
           requestBody = override.requestBodyOverride ?? requestBody;
@@ -126,15 +127,16 @@ class SimVaultHttpClientWrapper extends http.BaseClient {
         responseBody = '<binary ${bytes.length} bytes>';
       }
 
-      // === VERY LOUD DEBUG ===
-      print('''
-🚀🚀🚀 SENDING NETWORK EVENT TO WEBSOCKET 🚀🚀🚀
+      if (kDebugMode) {
+        debugPrint('''
+🚀 SENDING NETWORK EVENT
   Event ID: $id
   Method: ${request.method}
   URL: ${request.url}
   Status: ${response.statusCode}
   Duration: ${stopwatch.elapsedMilliseconds}ms
 ''');
+      }
 
       _simvault.sendEvent(
         NetworkEvent(
@@ -152,7 +154,7 @@ class SimVaultHttpClientWrapper extends http.BaseClient {
         ),
       );
 
-      print('✅ Event sent to _simvault.sendEvent() — waiting for WebSocket to deliver it');
+      if (kDebugMode) debugPrint('✅ Event sent to _simvault.sendEvent()');
       // Rebuild the StreamedResponse with the already-consumed bytes.
       return http.StreamedResponse(
         Stream.value(bytes),
@@ -168,13 +170,15 @@ class SimVaultHttpClientWrapper extends http.BaseClient {
       stopwatch.stop();
       // Record the failure so SimVault shows it in the timeline.
 
-      print('''
-🚀🚀🚀 ERROR SENDING NETWORK EVENT TO WEBSOCKET 🚀🚀🚀
+      if (kDebugMode) {
+        debugPrint('''
+❌ NETWORK EVENT ERROR
   Event ID: $id
   Method: ${request.method}
   URL: ${request.url}
-]  Duration: ${stopwatch.elapsedMilliseconds}ms
+  Duration: ${stopwatch.elapsedMilliseconds}ms
 ''');
+      }
 
       _simvault.sendEvent(
         NetworkEvent(

@@ -365,7 +365,7 @@ class _SimVaultHttpClientRequest implements HttpClientRequest {
       }
       return response;
     } catch (e) {
-      print('[SimVault] ❌ dart:io intercept body override failed: $e');
+      if (kDebugMode) debugPrint('[SimVault] ❌ dart:io intercept body override failed: $e');
       return null;
     }
   }

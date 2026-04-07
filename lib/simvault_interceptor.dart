@@ -53,11 +53,11 @@ abstract final class SimVaultInterceptor {
     final config = await SimVaultSessionConfig.read();
 
     if (config == null) {
-      debugPrint('[SimVaultInterceptor] No simvault_session.json — interceptor inactive');
+      if (kDebugMode) debugPrint('[SimVaultInterceptor] No simvault_session.json — interceptor inactive');
       return;
     }
 
-    print('[SimVaultInterceptor] ✅ Activating: sessionId=${config.sessionId}, mode=${config.mode}');
+    if (kDebugMode) debugPrint('[SimVaultInterceptor] ✅ Activating: sessionId=${config.sessionId}, mode=${config.mode}');
 
     await SimVaultClient().init(sessionId: config.sessionId, mode: config.mode);
     _initialized = true;
@@ -89,9 +89,8 @@ abstract final class SimVaultInterceptor {
   /// Resume forwarding events after a [disable] call.
   static void enable() => _client.enable();
 
-  /// `true` when the interceptor has been initialised **and** the WebSocket
-  /// connection to SimVault is currently open.
-  static bool get isActive => _initialized && _client.isConnected;
+  /// `true` when the interceptor has been initialised and is active.
+  static bool get isActive => _initialized && _client.isActive;
 
   // Internal — exposed for testing.
   // ignore: library_private_types_in_public_api

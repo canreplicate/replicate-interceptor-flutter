@@ -23,7 +23,7 @@ class TapePlayer {
       final tapeDir = Directory('${dir.path}/simvault_tape');
 
       if (!await tapeDir.exists()) {
-        print('[TapePlayer] ⚠️ simvault_tape/ not found — nothing to load');
+        if (kDebugMode) debugPrint('[TapePlayer] ⚠️ simvault_tape/ not found — nothing to load');
         return;
       }
 
@@ -40,14 +40,14 @@ class TapePlayer {
           final key = '${event.method.toUpperCase()} ${event.url}';
           (_queues[key] ??= Queue<NetworkEvent>()).add(event);
         } catch (e) {
-          debugPrint('[TapePlayer] Failed to parse ${file.path}: $e');
+          if (kDebugMode) debugPrint('[TapePlayer] Failed to parse ${file.path}: $e');
         }
       }
 
       final total = _queues.values.fold(0, (s, q) => s + q.length);
-      print('[TapePlayer] ✅ Loaded $total events across ${_queues.length} endpoints');
+      if (kDebugMode) debugPrint('[TapePlayer] ✅ Loaded $total events across ${_queues.length} endpoints');
     } catch (e) {
-      debugPrint('[TapePlayer] load() error: $e');
+      if (kDebugMode) debugPrint('[TapePlayer] load() error: $e');
     }
   }
 
@@ -57,11 +57,11 @@ class TapePlayer {
     final key = '${method.toUpperCase()} $url';
     final queue = _queues[key];
     if (queue == null || queue.isEmpty) {
-      debugPrint('[TapePlayer] MISS: $key');
+      if (kDebugMode) debugPrint('[TapePlayer] MISS: $key');
       return null;
     }
     final event = queue.removeFirst();
-    debugPrint('[TapePlayer] HIT: $key (${queue.length} remaining)');
+    if (kDebugMode) debugPrint('[TapePlayer] HIT: $key (${queue.length} remaining)');
     return event;
   }
 }

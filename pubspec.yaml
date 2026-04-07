@@ -1,8 +1,8 @@
 name: simvault_interceptor
 description: >
-  Flutter package that intercepts network traffic and streams it to SimVault
-  (a macOS tool for iOS Simulator snapshot and network recording) over a local
-  WebSocket. Supports package:http, Dio, and dart:io HttpClient.
+  Flutter package that intercepts network traffic for SimVault
+  (a macOS tool for iOS Simulator snapshot and network recording).
+  Supports package:http, Dio, and dart:io HttpClient.
 version: 0.1.0
 homepage: https://github.com/simvault/simvault_interceptor
 
@@ -13,8 +13,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  # WebSocket transport to SimVault desktop tool
-  web_socket_channel: ^3.0.0
   # UUID generation for network event IDs
   uuid: ^4.4.0
   # package:http interceptor support

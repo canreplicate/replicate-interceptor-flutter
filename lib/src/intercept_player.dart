@@ -49,7 +49,7 @@ class InterceptPlayer {
       final overridesDir = Directory('${dir.path}/simvault_overrides');
 
       if (!await overridesDir.exists()) {
-        debugPrint('[InterceptPlayer] simvault_overrides/ not found — nothing to load');
+        if (kDebugMode) debugPrint('[InterceptPlayer] simvault_overrides/ not found — nothing to load');
         return;
       }
 
@@ -73,16 +73,16 @@ class InterceptPlayer {
           final key = '${method.toUpperCase()} $url';
           _overrides[key] = TapeOverride.fromJson(raw);
         } catch (e) {
-          debugPrint('[InterceptPlayer] Failed to parse ${file.path}: $e');
+          if (kDebugMode) debugPrint('[InterceptPlayer] Failed to parse ${file.path}: $e');
         }
       }
 
-      print('[InterceptPlayer] ✅ Loaded ${_overrides.length} overrides');
+      if (kDebugMode) debugPrint('[InterceptPlayer] ✅ Loaded ${_overrides.length} overrides');
       for (final k in _overrides.keys) {
-        print('[InterceptPlayer]   → $k');
+        if (kDebugMode) debugPrint('[InterceptPlayer]   → $k');
       }
     } catch (e) {
-      print('[InterceptPlayer] ❌ load() error: $e');
+      if (kDebugMode) debugPrint('[InterceptPlayer] ❌ load() error: $e');
     }
   }
 
@@ -93,9 +93,9 @@ class InterceptPlayer {
     final key = '${method.toUpperCase()} $url';
     final override = _overrides[key];
     if (override == null) {
-      print('[InterceptPlayer] MISS: $key');
+      if (kDebugMode) debugPrint('[InterceptPlayer] MISS: $key');
     } else {
-      print('[InterceptPlayer] HIT: $key  (reqOverride=${override.hasRequestOverride}, respOverride=${override.hasResponseOverride})');
+      if (kDebugMode) debugPrint('[InterceptPlayer] HIT: $key  (reqOverride=${override.hasRequestOverride}, respOverride=${override.hasResponseOverride})');
     }
     return override;
   }

@@ -13,6 +13,7 @@ import 'package:http/http.dart' as http;
 import 'src/interceptors/dart_http_overrides.dart';
 import 'src/interceptors/dio_interceptor.dart';
 import 'src/interceptors/http_interceptor.dart';
+import 'src/keystore_manager.dart';
 import 'src/session_config.dart';
 import 'src/simvault_client.dart';
 
@@ -20,6 +21,7 @@ export 'src/interceptors/dart_http_overrides.dart' show SimVaultHttpOverrides;
 export 'src/interceptors/dio_interceptor.dart' show SimVaultDioInterceptor;
 export 'src/interceptors/http_interceptor.dart' show SimVaultHttpClientWrapper;
 export 'src/intercept_player.dart' show InterceptPlayer, TapeOverride;
+export 'src/keystore_manager.dart' show KeystoreManager;
 export 'src/network_event.dart' show NetworkEvent, NetworkEventSink;
 export 'src/session_config.dart' show SimVaultSessionConfig;
 export 'src/simvault_client.dart' show SimVaultClient;
@@ -50,6 +52,15 @@ abstract final class SimVaultInterceptor {
   /// Must be called before `runApp` so that [HttpOverrides] is installed early
   /// enough to cover all [HttpClient] instances.
   static Future<void> init() async {
+    try {
+      await _doInit();
+    } catch (e) {
+      // Never crash the host app — if init fails, stay inactive.
+      if (kDebugMode) debugPrint('[SimVaultInterceptor] ❌ init() failed — staying inactive: $e');
+    }
+  }
+
+  static Future<void> _doInit() async {
     final config = await SimVaultSessionConfig.read();
 
     if (config == null) {
@@ -59,8 +70,56 @@ abstract final class SimVaultInterceptor {
 
     if (kDebugMode) debugPrint('[SimVaultInterceptor] ✅ Activating: sessionId=${config.sessionId}, mode=${config.mode}');
 
+    // Restore Keychain entries before the app's auth logic runs.
+    if (config.restoreKeystore && !kReleaseMode) {
+      if (kDebugMode) debugPrint('[SimVaultInterceptor] Restoring keystore...');
+      try {
+        final restored = await KeystoreManager().restoreFromFile();
+        if (kDebugMode) debugPrint('[SimVaultInterceptor] Keystore restore: ${restored ? 'success' : 'skipped'}');
+      } catch (e) {
+        if (kDebugMode) debugPrint('[SimVaultInterceptor] Keystore restore failed (non-fatal): $e');
+      }
+    }
+
+    // dump_keystore mode: dump keystore and return without activating interceptors.
+    if (config.mode == 'dump_keystore') {
+      if (kDebugMode) debugPrint('[SimVaultInterceptor] dump_keystore mode — dumping and exiting');
+      try {
+        await KeystoreManager().dumpToFile();
+      } catch (e) {
+        if (kDebugMode) debugPrint('[SimVaultInterceptor] Keystore dump failed: $e');
+      }
+      return;
+    }
+
+    // restore_only mode: keystore was already restored above, nothing else to do.
+    // Used by Quick Save restore — app runs normally with no interception.
+    if (config.mode == 'restore_only') {
+      if (kDebugMode) debugPrint('[SimVaultInterceptor] restore_only mode — keystore restored, staying inactive');
+      return;
+    }
+
     await SimVaultClient().init(sessionId: config.sessionId, mode: config.mode);
     _initialized = true;
+
+    // In record mode, dump keystore after the app finishes initializing.
+    // Deferred so WidgetsFlutterBinding is initialized before FlutterSecureStorage is accessed.
+    if (config.mode == 'record' && !kReleaseMode) {
+      Future.delayed(const Duration(seconds: 3), () {
+        KeystoreManager().dumpToFile().catchError((_) {});
+      });
+    }
+  }
+
+  /// Dumps all `flutter_secure_storage` entries to
+  /// `Documents/simvault_keystore.json`.
+  ///
+  /// Called automatically in record mode. Also used by `dump_keystore` mode.
+  /// No-op in release builds.
+  // Internal — not part of the public API. May be promoted in a future version.
+  static Future<bool> dumpKeystore() async {
+    if (kReleaseMode) return false;
+    return KeystoreManager().dumpToFile();
   }
 
   /// Returns a [http.Client] that forwards all traffic to SimVault.

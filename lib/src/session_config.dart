@@ -14,10 +14,18 @@ import 'package:path_provider/path_provider.dart';
 class SimVaultSessionConfig {
   final String sessionId;
 
-  /// `'record'`, `'replay'`, or `'intercept'`
+  /// `'record'`, `'replay'`, `'intercept'`, or `'dump_keystore'`
   final String mode;
 
-  const SimVaultSessionConfig({required this.sessionId, required this.mode});
+  /// When `true`, the interceptor restores Keychain entries from
+  /// `Documents/simvault_keystore.json` on `init()` before the app runs.
+  final bool restoreKeystore;
+
+  const SimVaultSessionConfig({
+    required this.sessionId,
+    required this.mode,
+    this.restoreKeystore = false,
+  });
 
   static Future<SimVaultSessionConfig?> read() async {
     try {
@@ -30,6 +38,7 @@ class SimVaultSessionConfig {
       return SimVaultSessionConfig(
         sessionId: sessionId,
         mode: raw['mode'] as String? ?? 'record',
+        restoreKeystore: raw['restoreKeystore'] as bool? ?? false,
       );
     } catch (_) {
       return null;

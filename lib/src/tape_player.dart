@@ -9,21 +9,21 @@ import 'network_event.dart';
 
 /// Loads recorded tape files and replays them FIFO per `METHOD url` key.
 ///
-/// Used when the app is launched with `SIMVAULT_MODE=replay`. Call [load]
+/// Used when the app is launched with `REPLICATE_MODE=replay`. Call [load]
 /// once on startup, then call [play] for each outgoing request.
 class TapePlayer {
   // "GET https://api.example.com/path" → ordered queue of recorded events
   final _queues = <String, Queue<NetworkEvent>>{};
 
-  /// Reads all `*.json` files from `Documents/simvault_tape/` and builds
+  /// Reads all `*.json` files from `Documents/replicate_tape/` and builds
   /// the in-memory replay map.
   Future<void> load() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final tapeDir = Directory('${dir.path}/simvault_tape');
+      final tapeDir = Directory('${dir.path}/replicate_tape');
 
       if (!await tapeDir.exists()) {
-        if (kDebugMode) debugPrint('[TapePlayer] ⚠️ simvault_tape/ not found — nothing to load');
+        if (kDebugMode) debugPrint('[TapePlayer] ⚠️ replicate_tape/ not found — nothing to load');
         return;
       }
 

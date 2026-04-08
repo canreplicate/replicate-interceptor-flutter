@@ -6,13 +6,13 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Manages exporting and importing `flutter_secure_storage` Keychain entries
-/// so that login state (auth tokens, etc.) survives SimVault snapshot restores.
+/// so that login state (auth tokens, etc.) survives Replicate snapshot restores.
 ///
 /// **Security:** This class writes plaintext Keychain contents to a JSON file
 /// in Documents/. It is guarded by [kReleaseMode] — all operations are no-ops
 /// in release builds.
 class KeystoreManager {
-  static const _fileName = 'simvault_keystore.json';
+  static const _fileName = 'replicate_keystore.json';
 
   final FlutterSecureStorage _storage;
 
@@ -55,7 +55,7 @@ class KeystoreManager {
     }
   }
 
-  /// Calls [export] and writes the result to `Documents/simvault_keystore.json`.
+  /// Calls [export] and writes the result to `Documents/replicate_keystore.json`.
   ///
   /// Returns `true` if the file was written successfully.
   Future<bool> dumpToFile() async {
@@ -83,7 +83,7 @@ class KeystoreManager {
     }
   }
 
-  /// Reads `Documents/simvault_keystore.json`, writes entries into
+  /// Reads `Documents/replicate_keystore.json`, writes entries into
   /// `flutter_secure_storage`, then deletes the file.
   ///
   /// Returns `true` if keystore was restored successfully.

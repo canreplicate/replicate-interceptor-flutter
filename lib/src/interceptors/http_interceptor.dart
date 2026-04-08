@@ -6,25 +6,25 @@ import 'package:uuid/uuid.dart';
 
 import '../intercept_player.dart';
 import '../network_event.dart';
-import '../simvault_client.dart';
+import '../replicate_client.dart';
 
 /// A drop-in [http.Client] wrapper that forwards every request/response pair
-/// to SimVault.
+/// to Replicate.
 ///
-/// Obtain an instance via [SimVaultInterceptor.wrapHttpClient]:
+/// Obtain an instance via [ReplicateInterceptor.wrapHttpClient]:
 /// ```dart
-/// final client = SimVaultInterceptor.wrapHttpClient(http.Client());
+/// final client = ReplicateInterceptor.wrapHttpClient(http.Client());
 /// final response = await client.get(Uri.parse('https://example.com/api'));
 /// ```
 ///
 /// The original client is returned unchanged when the interceptor is inactive
-/// (i.e. the app was not launched by SimVault).
-class SimVaultHttpClientWrapper extends http.BaseClient {
+/// (i.e. the app was not launched by Replicate).
+class ReplicateHttpClientWrapper extends http.BaseClient {
   final http.Client _inner;
-  final NetworkEventSink _simvault;
+  final NetworkEventSink _replicate;
   static const _uuid = Uuid();
 
-  SimVaultHttpClientWrapper(this._inner, this._simvault);
+  ReplicateHttpClientWrapper(this._inner, this._replicate);
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -39,8 +39,8 @@ class SimVaultHttpClientWrapper extends http.BaseClient {
     }
 
     // In replay mode: return recorded response without hitting the network.
-    if (_simvault is SimVaultClient) {
-      final client = _simvault as SimVaultClient;
+    if (_replicate is ReplicateClient) {
+      final client = _replicate as ReplicateClient;
 
       if (client.isReplayMode) {
         final recorded = client.replay(request.method, request.url.toString());
@@ -76,7 +76,7 @@ class SimVaultHttpClientWrapper extends http.BaseClient {
             responseBody = '<binary ${bytes.length} bytes>';
           }
 
-          _simvault.sendEvent(NetworkEvent(
+          _replicate.sendEvent(NetworkEvent(
             id: id,
             timestamp: timestamp,
             method: request.method,
@@ -138,7 +138,7 @@ class SimVaultHttpClientWrapper extends http.BaseClient {
 ''');
       }
 
-      _simvault.sendEvent(
+      _replicate.sendEvent(
         NetworkEvent(
           id: id,
           timestamp: timestamp,
@@ -154,7 +154,7 @@ class SimVaultHttpClientWrapper extends http.BaseClient {
         ),
       );
 
-      if (kDebugMode) debugPrint('✅ Event sent to _simvault.sendEvent()');
+      if (kDebugMode) debugPrint('✅ Event sent to _replicate.sendEvent()');
       // Rebuild the StreamedResponse with the already-consumed bytes.
       return http.StreamedResponse(
         Stream.value(bytes),
@@ -168,7 +168,7 @@ class SimVaultHttpClientWrapper extends http.BaseClient {
       );
     } catch (e, st) {
       stopwatch.stop();
-      // Record the failure so SimVault shows it in the timeline.
+      // Record the failure so Replicate shows it in the timeline.
 
       if (kDebugMode) {
         debugPrint('''
@@ -180,7 +180,7 @@ class SimVaultHttpClientWrapper extends http.BaseClient {
 ''');
       }
 
-      _simvault.sendEvent(
+      _replicate.sendEvent(
         NetworkEvent(
           id: id,
           timestamp: timestamp,

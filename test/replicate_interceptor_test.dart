@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:simvault_interceptor/simvault_interceptor.dart';
+import 'package:replicate_interceptor/replicate_interceptor.dart';
 
 // ---------------------------------------------------------------------------
 // Test doubles
@@ -80,7 +80,7 @@ void main() {
     });
   });
 
-  group('SimVaultHttpClientWrapper', () {
+  group('ReplicateHttpClientWrapper', () {
     test('returns the response body unchanged', () async {
       final sink = _CollectingSink();
       final mockHttp = MockClient((_) async => http.Response(
@@ -88,7 +88,7 @@ void main() {
             200,
             headers: {'content-type': 'application/json'},
           ));
-      final wrapper = SimVaultHttpClientWrapper(mockHttp, sink);
+      final wrapper = ReplicateHttpClientWrapper(mockHttp, sink);
 
       final response = await wrapper.get(Uri.parse('https://example.com/api'));
 
@@ -103,7 +103,7 @@ void main() {
             200,
             headers: {'content-type': 'application/json'},
           ));
-      final wrapper = SimVaultHttpClientWrapper(mockHttp, sink);
+      final wrapper = ReplicateHttpClientWrapper(mockHttp, sink);
 
       await wrapper.get(Uri.parse('https://example.com/api'));
 
@@ -124,7 +124,7 @@ void main() {
     test('records a POST with request body', () async {
       final sink = _CollectingSink();
       final mockHttp = MockClient((_) async => http.Response('created', 201));
-      final wrapper = SimVaultHttpClientWrapper(mockHttp, sink);
+      final wrapper = ReplicateHttpClientWrapper(mockHttp, sink);
 
       await wrapper.post(
         Uri.parse('https://example.com/users'),
@@ -141,7 +141,7 @@ void main() {
       final sink = _CollectingSink();
       final mockHttp =
           MockClient((_) async => http.Response('not found', 404));
-      final wrapper = SimVaultHttpClientWrapper(mockHttp, sink);
+      final wrapper = ReplicateHttpClientWrapper(mockHttp, sink);
 
       final response =
           await wrapper.get(Uri.parse('https://example.com/missing'));
@@ -155,7 +155,7 @@ void main() {
       final sink = _CollectingSink();
       final mockHttp =
           MockClient((_) async => throw const SocketException('no route'));
-      final wrapper = SimVaultHttpClientWrapper(mockHttp, sink);
+      final wrapper = ReplicateHttpClientWrapper(mockHttp, sink);
 
       await expectLater(
         wrapper.get(Uri.parse('https://example.com')),

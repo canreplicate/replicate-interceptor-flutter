@@ -5,20 +5,20 @@ import 'package:uuid/uuid.dart';
 
 import '../intercept_player.dart';
 import '../network_event.dart';
-import '../simvault_client.dart';
+import '../replicate_client.dart';
 
-/// A Dio [Interceptor] that forwards every request/response pair to SimVault.
+/// A Dio [Interceptor] that forwards every request/response pair to Replicate.
 ///
-/// Add it to your [Dio] instance via [SimVaultInterceptor.addDioInterceptor]:
+/// Add it to your [Dio] instance via [ReplicateInterceptor.addDioInterceptor]:
 /// ```dart
 /// final dio = Dio();
-/// SimVaultInterceptor.addDioInterceptor(dio);
+/// ReplicateInterceptor.addDioInterceptor(dio);
 /// ```
 ///
 /// Does nothing when the interceptor is inactive (i.e. the app was not
-/// launched by SimVault).
-class SimVaultDioInterceptor extends Interceptor {
-  final NetworkEventSink _simvault;
+/// launched by Replicate).
+class ReplicateDioInterceptor extends Interceptor {
+  final NetworkEventSink _replicate;
   static const _uuid = Uuid();
 
   // Keys stored in RequestOptions.extra to carry timing data across callbacks.
@@ -27,7 +27,7 @@ class SimVaultDioInterceptor extends Interceptor {
   static const _kTs = '_sv_timestamp';
   static const _kOverride = '_sv_override';
 
-  SimVaultDioInterceptor(this._simvault);
+  ReplicateDioInterceptor(this._replicate);
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
@@ -35,8 +35,8 @@ class SimVaultDioInterceptor extends Interceptor {
     options.extra[_kId] = _uuid.v4();
     options.extra[_kTs] = DateTime.now().toIso8601String();
 
-    if (_simvault is SimVaultClient) {
-      final client = _simvault as SimVaultClient;
+    if (_replicate is ReplicateClient) {
+      final client = _replicate as ReplicateClient;
 
       // In replay mode: resolve with recorded response, no real network call.
       if (client.isReplayMode) {
@@ -147,7 +147,7 @@ class SimVaultDioInterceptor extends Interceptor {
       }
     }
 
-    _simvault.sendEvent(NetworkEvent(
+    _replicate.sendEvent(NetworkEvent(
       id: id,
       timestamp: timestamp,
       method: options.method.toUpperCase(),

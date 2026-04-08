@@ -33,7 +33,7 @@ class TapeOverride {
       statusCodeOverride != null || responseBodyOverride != null;
 }
 
-/// Loads override files from `Documents/simvault_overrides/` and surfaces them
+/// Loads override files from `Documents/replicate_overrides/` and surfaces them
 /// per `"METHOD url"` key for use in intercept mode.
 ///
 /// Unlike [TapePlayer], overrides are not consumed (no FIFO) — the same
@@ -41,15 +41,15 @@ class TapeOverride {
 class InterceptPlayer {
   final _overrides = <String, TapeOverride>{};
 
-  /// Reads all `*.json` files from `Documents/simvault_overrides/` and builds
+  /// Reads all `*.json` files from `Documents/replicate_overrides/` and builds
   /// the in-memory override map.
   Future<void> load() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final overridesDir = Directory('${dir.path}/simvault_overrides');
+      final overridesDir = Directory('${dir.path}/replicate_overrides');
 
       if (!await overridesDir.exists()) {
-        if (kDebugMode) debugPrint('[InterceptPlayer] simvault_overrides/ not found — nothing to load');
+        if (kDebugMode) debugPrint('[InterceptPlayer] replicate_overrides/ not found — nothing to load');
         return;
       }
 
@@ -65,7 +65,7 @@ class InterceptPlayer {
 
           // Each override file has a "method" + "url" field so we can build
           // the lookup key. These are copied from the original tape entry by
-          // SimVault when it creates the override file.
+          // Replicate when it creates the override file.
           final method = raw['method'] as String?;
           final url = raw['url'] as String?;
           if (method == null || url == null) continue;

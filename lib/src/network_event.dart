@@ -2,13 +2,13 @@ import 'dart:convert';
 
 /// Minimal interface required by interceptors to forward events.
 ///
-/// [SimVaultClient] is the production implementation; tests can provide a
+/// [ReplicateClient] is the production implementation; tests can provide a
 /// lightweight mock without depending on the WebSocket machinery.
 abstract interface class NetworkEventSink {
   void sendEvent(NetworkEvent event);
 }
 
-/// A captured HTTP request/response pair, ready to be sent to SimVault.
+/// A captured HTTP request/response pair, ready to be sent to Replicate.
 class NetworkEvent {
   /// Unique identifier (UUID v4) for this event.
   final String id;

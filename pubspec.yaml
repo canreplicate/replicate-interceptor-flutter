@@ -1,10 +1,10 @@
-name: simvault_interceptor
+name: replicate_interceptor
 description: >
-  Flutter package that intercepts network traffic for SimVault
+  Flutter package that intercepts network traffic for Replicate
   (a macOS tool for iOS Simulator snapshot and network recording).
   Supports package:http, Dio, and dart:io HttpClient.
 version: 0.1.0
-homepage: https://github.com/simvault/simvault_interceptor
+homepage: https://github.com/replicate/replicate_interceptor
 
 environment:
   sdk: ^3.9.2

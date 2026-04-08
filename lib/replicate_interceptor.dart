@@ -1,10 +1,10 @@
-// SimVault Interceptor — automatically records Flutter network traffic and
-// streams it to the SimVault macOS desktop tool for iOS Simulator sessions.
+// Replicate Interceptor — automatically records Flutter network traffic and
+// streams it to the Replicate macOS desktop tool for iOS Simulator sessions.
 //
 // Quick-start:
-//   await SimVaultInterceptor.init();           // in main()
-//   final client = SimVaultInterceptor.wrapHttpClient(http.Client());
-//   SimVaultInterceptor.addDioInterceptor(dio);
+//   await ReplicateInterceptor.init();           // in main()
+//   final client = ReplicateInterceptor.wrapHttpClient(http.Client());
+//   ReplicateInterceptor.addDioInterceptor(dio);
 //   // dart:io HttpClient is intercepted automatically.
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -15,28 +15,28 @@ import 'src/interceptors/dio_interceptor.dart';
 import 'src/interceptors/http_interceptor.dart';
 import 'src/keystore_manager.dart';
 import 'src/session_config.dart';
-import 'src/simvault_client.dart';
+import 'src/replicate_client.dart';
 
-export 'src/interceptors/dart_http_overrides.dart' show SimVaultHttpOverrides;
-export 'src/interceptors/dio_interceptor.dart' show SimVaultDioInterceptor;
-export 'src/interceptors/http_interceptor.dart' show SimVaultHttpClientWrapper;
+export 'src/interceptors/dart_http_overrides.dart' show ReplicateHttpOverrides;
+export 'src/interceptors/dio_interceptor.dart' show ReplicateDioInterceptor;
+export 'src/interceptors/http_interceptor.dart' show ReplicateHttpClientWrapper;
 export 'src/intercept_player.dart' show InterceptPlayer, TapeOverride;
 export 'src/keystore_manager.dart' show KeystoreManager;
 export 'src/network_event.dart' show NetworkEvent, NetworkEventSink;
-export 'src/session_config.dart' show SimVaultSessionConfig;
-export 'src/simvault_client.dart' show SimVaultClient;
+export 'src/session_config.dart' show ReplicateSessionConfig;
+export 'src/replicate_client.dart' show ReplicateClient;
 export 'src/tape_player.dart' show TapePlayer;
 
-/// Static entry point for the SimVault network recording package.
+/// Static entry point for the Replicate network recording package.
 ///
 /// Call [init] once in `main()`, before `runApp`.
 ///
-/// Activation is signalled by SimVault writing a `simvault_session.json` file
+/// Activation is signalled by Replicate writing a `replicate_session.json` file
 /// to the app's Documents directory before launching the app. When this file is
 /// absent (normal dev runs, CI, etc.) every method is a no-op, so it is safe
 /// to leave the calls in production code.
-abstract final class SimVaultInterceptor {
-  static final _client = SimVaultClient();
+abstract final class ReplicateInterceptor {
+  static final _client = ReplicateClient();
   static bool _initialized = false;
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ abstract final class SimVaultInterceptor {
 
   /// Initialise the interceptor.
   ///
-  /// Reads `Documents/simvault_session.json` written by the SimVault desktop
+  /// Reads `Documents/replicate_session.json` written by the Replicate desktop
   /// app before launching this process. If the file is absent the interceptor
   /// stays inactive (normal dev / CI runs are unaffected).
   ///
@@ -56,38 +56,38 @@ abstract final class SimVaultInterceptor {
       await _doInit();
     } catch (e) {
       // Never crash the host app — if init fails, stay inactive.
-      if (kDebugMode) debugPrint('[SimVaultInterceptor] ❌ init() failed — staying inactive: $e');
+      if (kDebugMode) debugPrint('[ReplicateInterceptor] ❌ init() failed — staying inactive: $e');
     }
   }
 
   static Future<void> _doInit() async {
-    final config = await SimVaultSessionConfig.read();
+    final config = await ReplicateSessionConfig.read();
 
     if (config == null) {
-      if (kDebugMode) debugPrint('[SimVaultInterceptor] No simvault_session.json — interceptor inactive');
+      if (kDebugMode) debugPrint('[ReplicateInterceptor] No replicate_session.json — interceptor inactive');
       return;
     }
 
-    if (kDebugMode) debugPrint('[SimVaultInterceptor] ✅ Activating: sessionId=${config.sessionId}, mode=${config.mode}');
+    if (kDebugMode) debugPrint('[ReplicateInterceptor] ✅ Activating: sessionId=${config.sessionId}, mode=${config.mode}');
 
     // Restore Keychain entries before the app's auth logic runs.
     if (config.restoreKeystore && !kReleaseMode) {
-      if (kDebugMode) debugPrint('[SimVaultInterceptor] Restoring keystore...');
+      if (kDebugMode) debugPrint('[ReplicateInterceptor] Restoring keystore...');
       try {
         final restored = await KeystoreManager().restoreFromFile();
-        if (kDebugMode) debugPrint('[SimVaultInterceptor] Keystore restore: ${restored ? 'success' : 'skipped'}');
+        if (kDebugMode) debugPrint('[ReplicateInterceptor] Keystore restore: ${restored ? 'success' : 'skipped'}');
       } catch (e) {
-        if (kDebugMode) debugPrint('[SimVaultInterceptor] Keystore restore failed (non-fatal): $e');
+        if (kDebugMode) debugPrint('[ReplicateInterceptor] Keystore restore failed (non-fatal): $e');
       }
     }
 
     // dump_keystore mode: dump keystore and return without activating interceptors.
     if (config.mode == 'dump_keystore') {
-      if (kDebugMode) debugPrint('[SimVaultInterceptor] dump_keystore mode — dumping and exiting');
+      if (kDebugMode) debugPrint('[ReplicateInterceptor] dump_keystore mode — dumping and exiting');
       try {
         await KeystoreManager().dumpToFile();
       } catch (e) {
-        if (kDebugMode) debugPrint('[SimVaultInterceptor] Keystore dump failed: $e');
+        if (kDebugMode) debugPrint('[ReplicateInterceptor] Keystore dump failed: $e');
       }
       return;
     }
@@ -95,11 +95,11 @@ abstract final class SimVaultInterceptor {
     // restore_only mode: keystore was already restored above, nothing else to do.
     // Used by Quick Save restore — app runs normally with no interception.
     if (config.mode == 'restore_only') {
-      if (kDebugMode) debugPrint('[SimVaultInterceptor] restore_only mode — keystore restored, staying inactive');
+      if (kDebugMode) debugPrint('[ReplicateInterceptor] restore_only mode — keystore restored, staying inactive');
       return;
     }
 
-    await SimVaultClient().init(sessionId: config.sessionId, mode: config.mode);
+    await ReplicateClient().init(sessionId: config.sessionId, mode: config.mode);
     _initialized = true;
 
     // In record mode, dump keystore after the app finishes initializing.
@@ -112,7 +112,7 @@ abstract final class SimVaultInterceptor {
   }
 
   /// Dumps all `flutter_secure_storage` entries to
-  /// `Documents/simvault_keystore.json`.
+  /// `Documents/replicate_keystore.json`.
   ///
   /// Called automatically in record mode. Also used by `dump_keystore` mode.
   /// No-op in release builds.
@@ -122,24 +122,24 @@ abstract final class SimVaultInterceptor {
     return KeystoreManager().dumpToFile();
   }
 
-  /// Returns a [http.Client] that forwards all traffic to SimVault.
+  /// Returns a [http.Client] that forwards all traffic to Replicate.
   ///
   /// When the interceptor is inactive [client] is returned unchanged.
   ///
   /// ```dart
-  /// final client = SimVaultInterceptor.wrapHttpClient(http.Client());
+  /// final client = ReplicateInterceptor.wrapHttpClient(http.Client());
   /// ```
   static http.Client wrapHttpClient(http.Client client) {
     if (!_initialized) return client;
-    return SimVaultHttpClientWrapper(client, _client);
+    return ReplicateHttpClientWrapper(client, _client);
   }
 
-  /// Attaches a [SimVaultDioInterceptor] to [dio].
+  /// Attaches a [ReplicateDioInterceptor] to [dio].
   ///
   /// Does nothing when the interceptor is inactive.
   static void addDioInterceptor(Dio dio) {
     if (!_initialized) return;
-    dio.interceptors.add(SimVaultDioInterceptor(_client));
+    dio.interceptors.add(ReplicateDioInterceptor(_client));
   }
 
   /// Temporarily stop forwarding events without tearing down the connection.
@@ -153,5 +153,5 @@ abstract final class SimVaultInterceptor {
 
   // Internal — exposed for testing.
   // ignore: library_private_types_in_public_api
-  static SimVaultClient get debugClient => _client;
+  static ReplicateClient get debugClient => _client;
 }

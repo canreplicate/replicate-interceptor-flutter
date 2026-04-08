@@ -1,7 +1,7 @@
-# simvault_interceptor
+# replicate_interceptor
 
 A Flutter package that automatically intercepts network traffic for
-**SimVault** — a macOS tool for saving, restoring, and replaying iOS Simulator
+**Replicate** — a macOS tool for saving, restoring, and replaying iOS Simulator
 app state and network sessions.
 
 The interceptor supports three modes: **record** (capture traffic to tape files),
@@ -10,7 +10,7 @@ live requests/responses). It also handles **secure storage persistence** —
 dumping and restoring `flutter_secure_storage` Keychain entries so login state
 survives snapshot restores.
 
-Activation is controlled by a `simvault_session.json` file that SimVault writes
+Activation is controlled by a `replicate_session.json` file that Replicate writes
 to the app's Documents directory before launching. When this file is absent
 (normal dev runs, CI, etc.) every method is a **complete no-op**, so it is safe
 to leave the interceptor in your codebase.
@@ -19,23 +19,23 @@ to leave the interceptor in your codebase.
 
 ## Important: init ordering
 
-`SimVaultInterceptor.init()` must be called **right after
+`ReplicateInterceptor.init()` must be called **right after
 `WidgetsFlutterBinding.ensureInitialized()`** and **before** any auth/state
 initialisation or `runApp()`.
 
 The binding must be initialized first because `path_provider` (used internally
-to locate `Documents/simvault_session.json`) requires it. After that, `init()`
+to locate `Documents/replicate_session.json`) requires it. After that, `init()`
 must run before auth logic so that keystore restore completes before the app
 reads Keychain entries.
 
 ```dart
-import 'package:simvault_interceptor/simvault_interceptor.dart';
+import 'package:replicate_interceptor/replicate_interceptor.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Right after binding init — before any auth/state setup
-  await SimVaultInterceptor.init();
+  await ReplicateInterceptor.init();
 
   // ... other setup (auth, providers, etc.) ...
   runApp(const MyApp());
@@ -46,13 +46,13 @@ void main() async {
 
 ## Release builds
 
-**Never include `simvault_interceptor` in release builds.** Use a dev-only
+**Never include `replicate_interceptor` in release builds.** Use a dev-only
 dependency or conditional import:
 
 ```yaml
 # pubspec.yaml
 dev_dependencies:
-  simvault_interceptor: ^0.1.0
+  replicate_interceptor: ^0.1.0
 ```
 
 Or use a conditional import so the interceptor code is tree-shaken in release:
@@ -63,7 +63,7 @@ import 'package:flutter/foundation.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (kDebugMode) {
-    await SimVaultInterceptor.init();
+    await ReplicateInterceptor.init();
   }
   // ... other setup ...
   runApp(const MyApp());
@@ -80,8 +80,8 @@ the safest approach is to not ship the package at all.
 
 | Client | How it's intercepted |
 |--------|----------------------|
-| `package:http` | `SimVaultInterceptor.wrapHttpClient(client)` |
-| `Dio` | `SimVaultInterceptor.addDioInterceptor(dio)` |
+| `package:http` | `ReplicateInterceptor.wrapHttpClient(client)` |
+| `Dio` | `ReplicateInterceptor.addDioInterceptor(dio)` |
 | `dart:io HttpClient` | Automatic via `HttpOverrides.global` |
 
 ---
@@ -91,11 +91,11 @@ the safest approach is to not ship the package at all.
 ### 1. Initialise in `main()`
 
 ```dart
-import 'package:simvault_interceptor/simvault_interceptor.dart';
+import 'package:replicate_interceptor/replicate_interceptor.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await SimVaultInterceptor.init();  // right after binding init
+  await ReplicateInterceptor.init();  // right after binding init
   runApp(const MyApp());
 }
 ```
@@ -105,7 +105,7 @@ void main() async {
 #### `package:http`
 
 ```dart
-final client = SimVaultInterceptor.wrapHttpClient(http.Client());
+final client = ReplicateInterceptor.wrapHttpClient(http.Client());
 final response = await client.get(Uri.parse('https://api.example.com/data'));
 ```
 
@@ -113,12 +113,12 @@ final response = await client.get(Uri.parse('https://api.example.com/data'));
 
 ```dart
 final dio = Dio();
-SimVaultInterceptor.addDioInterceptor(dio); // no-op when inactive
+ReplicateInterceptor.addDioInterceptor(dio); // no-op when inactive
 ```
 
 #### `dart:io HttpClient`
 
-No additional setup needed. `SimVaultInterceptor.init()` installs a global
+No additional setup needed. `ReplicateInterceptor.init()` installs a global
 `HttpOverrides` that wraps every `HttpClient` instance automatically.
 
 ---
@@ -133,13 +133,13 @@ No additional setup needed. `SimVaultInterceptor.init()` installs a global
 | `dump_keystore` | None | Dumps keystore to file and returns. Used by Quick Save. |
 | `restore_only` | None | Restores keystore then stays inactive. Used by Quick Save restore. |
 
-The mode is set by SimVault via `Documents/simvault_session.json`:
+The mode is set by Replicate via `Documents/replicate_session.json`:
 
 ```json
 {"sessionId": "93c8dc3f-...", "mode": "replay", "restoreKeystore": true}
 ```
 
-The `restoreKeystore` field is only present when SimVault has injected a
+The `restoreKeystore` field is only present when Replicate has injected a
 keystore file that needs to be restored to the Keychain before the app runs.
 
 ---
@@ -149,7 +149,7 @@ keystore file that needs to be restored to the Keychain before the app runs.
 ### Problem
 
 `flutter_secure_storage` stores auth tokens in the iOS Keychain, which lives
-outside the app's data container. SimVault's container snapshots don't capture
+outside the app's data container. Replicate's container snapshots don't capture
 Keychain items, so login state is lost on restore.
 
 ### Solution
@@ -158,15 +158,15 @@ The interceptor can dump all `flutter_secure_storage` entries to a JSON file
 and restore them on the next launch — before auth logic runs.
 
 **On save (Record Session):** The interceptor automatically dumps the keystore
-on `init()` when in record mode. The file (`Documents/simvault_keystore.json`)
-sits alongside the tape files. When SimVault calls `stopRecording()`, it copies
+on `init()` when in record mode. The file (`Documents/replicate_keystore.json`)
+sits alongside the tape files. When Replicate calls `stopRecording()`, it copies
 the keystore file into the snapshot directory. No separate app launch needed.
 
-**On save (Quick Save):** After saving the container, SimVault briefly launches
+**On save (Quick Save):** After saving the container, Replicate briefly launches
 the app with `mode: "dump_keystore"`. The interceptor dumps the keystore and
-SimVault copies the file into the snapshot directory. This adds ~2-3 seconds.
+Replicate copies the file into the snapshot directory. This adds ~2-3 seconds.
 
-**On restore (Session Record):** SimVault writes the keystore file back into
+**On restore (Session Record):** Replicate writes the keystore file back into
 `Documents/` and sets `restoreKeystore: true` in the session config (replay or
 intercept mode). On `init()`, the interceptor restores Keychain entries, deletes
 the plaintext file, then activates the requested mode.
@@ -198,7 +198,7 @@ may cause unexpected behaviour.
 
 - **v1:** All keys are captured. This is a known limitation.
 - **Future:** Optional key prefix filter via
-  `SimVaultInterceptor.init(keystoreKeys: ['auth_token', 'refresh_token'])`.
+  `ReplicateInterceptor.init(keystoreKeys: ['auth_token', 'refresh_token'])`.
 
 ### Simulator-only
 
@@ -212,16 +212,16 @@ a different transport mechanism.
 
 ```dart
 // Activate the interceptor (call once, first line of main()).
-await SimVaultInterceptor.init();
+await ReplicateInterceptor.init();
 
 // Wrap a package:http client.
-http.Client SimVaultInterceptor.wrapHttpClient(http.Client client);
+http.Client ReplicateInterceptor.wrapHttpClient(http.Client client);
 
 // Attach a Dio interceptor.
-void SimVaultInterceptor.addDioInterceptor(Dio dio);
+void ReplicateInterceptor.addDioInterceptor(Dio dio);
 
 // Check status.
-bool SimVaultInterceptor.isActive;
+bool ReplicateInterceptor.isActive;
 ```
 
 ---

@@ -60,8 +60,10 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
         final override = client.intercept(request.method, request.url.toString());
         if (kDebugMode) debugPrint('🎯 [http] intercept ${request.method} ${request.url} → override=$override');
         if (override != null) {
-          request = _applyRequestOverride(request, override);
-          requestBody = override.requestBodyOverride ?? requestBody;
+          if (override.hasRequestOverride) {
+            request = _applyRequestOverride(request, override);
+            requestBody = override.requestBodyOverride ?? requestBody;
+          }
         }
 
         try {
@@ -76,6 +78,16 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
             responseBody = '<binary ${bytes.length} bytes>';
           }
 
+          final effectiveStatus = (override != null && override.hasResponseOverride && override.statusCodeOverride != null)
+              ? override.statusCodeOverride!
+              : response.statusCode;
+          final effectiveBody = (override != null && override.hasResponseOverride && override.responseBodyOverride != null)
+              ? override.responseBodyOverride!
+              : responseBody;
+          final effectiveBytes = (override != null && override.hasResponseOverride && override.responseBodyOverride != null)
+              ? utf8.encode(override.responseBodyOverride!)
+              : bytes;
+
           _replicate.sendEvent(NetworkEvent(
             id: id,
             timestamp: timestamp,
@@ -83,21 +95,16 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
             url: request.url.toString(),
             requestHeaders: Map<String, String>.from(request.headers),
             requestBody: requestBody,
-            statusCode: override?.statusCodeOverride ?? response.statusCode,
+            statusCode: effectiveStatus,
             responseHeaders: Map<String, String>.from(response.headers),
-            responseBody: override?.responseBodyOverride ?? responseBody,
+            responseBody: effectiveBody,
             durationMs: stopwatch.elapsedMilliseconds,
-            isSuccess: (override?.statusCodeOverride ?? response.statusCode) >= 200 &&
-                (override?.statusCodeOverride ?? response.statusCode) < 300,
+            isSuccess: effectiveStatus >= 200 && effectiveStatus < 300,
           ));
-
-          final effectiveBytes = override?.responseBodyOverride != null
-              ? utf8.encode(override!.responseBodyOverride!)
-              : bytes;
 
           return http.StreamedResponse(
             Stream.value(effectiveBytes),
-            override?.statusCodeOverride ?? response.statusCode,
+            effectiveStatus,
             contentLength: effectiveBytes.length,
             request: response.request,
             headers: response.headers,

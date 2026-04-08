@@ -62,7 +62,7 @@ class ReplicateDioInterceptor extends Interceptor {
         final override = client.intercept(options.method.toUpperCase(), options.uri.toString());
         if (override != null) {
           options.extra[_kOverride] = override;
-          if (override.requestBodyOverride != null) {
+          if (override.hasRequestOverride) {
             options.data = override.requestBodyOverride;
           }
         }

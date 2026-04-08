@@ -16,21 +16,31 @@ class TapeOverride {
   /// Replaces the response body (replay + intercept).
   final String? responseBodyOverride;
 
+  /// When true, [requestBodyOverride] is applied. When false, ignored.
+  final bool requestBypass;
+
+  /// When true, [statusCodeOverride] and [responseBodyOverride] are applied.
+  final bool responseBypass;
+
   const TapeOverride({
     this.requestBodyOverride,
     this.statusCodeOverride,
     this.responseBodyOverride,
+    this.requestBypass = false,
+    this.responseBypass = false,
   });
 
   factory TapeOverride.fromJson(Map<String, dynamic> json) => TapeOverride(
         requestBodyOverride: json['requestBodyOverride'] as String?,
         statusCodeOverride: json['statusCodeOverride'] as int?,
         responseBodyOverride: json['responseBodyOverride'] as String?,
+        requestBypass: json['requestBypass'] as bool? ?? true,
+        responseBypass: json['responseBypass'] as bool? ?? true,
       );
 
-  bool get hasRequestOverride => requestBodyOverride != null;
+  bool get hasRequestOverride => requestBypass && requestBodyOverride != null;
   bool get hasResponseOverride =>
-      statusCodeOverride != null || responseBodyOverride != null;
+      responseBypass && (statusCodeOverride != null || responseBodyOverride != null);
 }
 
 /// Loads override files from `Documents/replicate_overrides/` and surfaces them

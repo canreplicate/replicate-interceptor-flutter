@@ -285,7 +285,7 @@ class _ReplicateHttpClientRequest implements HttpClientRequest {
       // In intercept mode: optionally replace request body, then apply response overrides.
       if (client.isInterceptMode) {
         final override = client.intercept(_method, _url);
-        if (override != null && override.requestBodyOverride != null) {
+        if (override != null && override.hasRequestOverride) {
           // dart:io doesn't let us rewrite bytes already written to _inner.
           // Abort this request and open a fresh one with the overridden body.
           _inner.abort();

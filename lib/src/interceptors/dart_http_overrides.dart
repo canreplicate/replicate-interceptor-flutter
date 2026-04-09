@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
@@ -270,6 +271,12 @@ class _ReplicateHttpClientRequest implements HttpClientRequest {
   }
 
   Future<HttpClientResponse> _doClose() async {
+    // Determine content-type for encoding decision.
+    String? reqContentType;
+    try {
+      reqContentType = _inner.headers.contentType?.toString();
+    } catch (_) {}
+
     if (_replicate is ReplicateClient) {
       final client = _replicate as ReplicateClient;
 
@@ -311,13 +318,10 @@ class _ReplicateHttpClientRequest implements HttpClientRequest {
       reqHeaders[name] = values.join(', ');
     });
 
-    String? requestBody;
+    // Encode request body using content-type detection.
+    EncodedBody? encodedReqBody;
     if (_bodyBytes.isNotEmpty) {
-      try {
-        requestBody = utf8.decode(_bodyBytes);
-      } catch (_) {
-        requestBody = '<binary ${_bodyBytes.length} bytes>';
-      }
+      encodedReqBody = NetworkEvent.encodeBody(_bodyBytes, reqContentType);
     }
 
     return _ReplicateHttpClientResponse(
@@ -329,7 +333,7 @@ class _ReplicateHttpClientRequest implements HttpClientRequest {
       _timestamp,
       _stopwatch.elapsedMilliseconds,
       reqHeaders,
-      requestBody,
+      encodedReqBody,
     );
   }
 
@@ -353,7 +357,8 @@ class _ReplicateHttpClientRequest implements HttpClientRequest {
         }
       });
 
-      final bodyBytes = utf8.encode(override.requestBodyOverride!);
+      final bodyBytes = override.requestBodyOverrideBytes ??
+          utf8.encode(override.requestBodyOverride!);
       newRequest.contentLength = bodyBytes.length;
       newRequest.add(bodyBytes);
 
@@ -365,7 +370,7 @@ class _ReplicateHttpClientRequest implements HttpClientRequest {
       }
       return response;
     } catch (e) {
-      if (kDebugMode) debugPrint('[Replicate] ❌ dart:io intercept body override failed: $e');
+      if (kDebugMode) debugPrint('[Replicate] dart:io intercept body override failed: $e');
       return null;
     }
   }
@@ -448,7 +453,7 @@ class _ReplicateHttpClientResponse extends Stream<List<int>>
   final String _timestamp;
   final int _durationMs;
   final Map<String, String> _reqHeaders;
-  final String? _requestBody;
+  final EncodedBody? _requestBody;
 
   _ReplicateHttpClientResponse(
     this._inner,
@@ -488,13 +493,11 @@ class _ReplicateHttpClientResponse extends Stream<List<int>>
     final respHeaders = <String, String>{};
     _inner.headers.forEach((k, v) => respHeaders[k] = v.join(', '));
 
-    String? responseBody;
+    // Encode response body using content-type detection.
+    EncodedBody? encodedRespBody;
     if (bytes.isNotEmpty) {
-      try {
-        responseBody = utf8.decode(bytes);
-      } catch (_) {
-        responseBody = '<binary ${bytes.length} bytes>';
-      }
+      final respContentType = respHeaders['content-type'];
+      encodedRespBody = NetworkEvent.encodeBody(bytes, respContentType);
     }
 
     _replicate.sendEvent(NetworkEvent(
@@ -503,10 +506,12 @@ class _ReplicateHttpClientResponse extends Stream<List<int>>
       method: _method,
       url: _url,
       requestHeaders: _reqHeaders,
-      requestBody: _requestBody,
+      requestBody: _requestBody?.body,
+      requestBodyEncoding: _requestBody?.encoding ?? 'utf8',
       statusCode: _inner.statusCode,
       responseHeaders: respHeaders,
-      responseBody: responseBody,
+      responseBody: encodedRespBody?.body,
+      responseBodyEncoding: encodedRespBody?.encoding ?? 'utf8',
       durationMs: _durationMs,
       isSuccess: _inner.statusCode >= 200 && _inner.statusCode < 300,
     ));
@@ -570,12 +575,13 @@ class _ReplicateInterceptResponse extends Stream<List<int>>
     implements HttpClientResponse {
   final HttpClientResponse _inner;
   final TapeOverride _override;
-  late final List<int> _overrideBytes;
+  late final Uint8List _overrideBytes;
 
   _ReplicateInterceptResponse(this._inner, this._override) {
-    _overrideBytes = _override.responseBodyOverride != null
-        ? utf8.encode(_override.responseBodyOverride!)
-        : [];
+    _overrideBytes = _override.responseBodyOverrideBytes ??
+        (_override.responseBodyOverride != null
+            ? Uint8List.fromList(utf8.encode(_override.responseBodyOverride!))
+            : Uint8List(0));
   }
 
   @override
@@ -651,10 +657,10 @@ class _ReplicateInterceptResponse extends Stream<List<int>>
 class _ReplicateReplayResponse extends Stream<List<int>>
     implements HttpClientResponse {
   final NetworkEvent _event;
-  final List<int> _bodyBytes;
+  final Uint8List _bodyBytes;
 
   _ReplicateReplayResponse(this._event)
-      : _bodyBytes = utf8.encode(_event.responseBody ?? '');
+      : _bodyBytes = _event.responseBodyBytes;
 
   @override
   int get statusCode => _event.statusCode ?? 200;

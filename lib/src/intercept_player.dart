@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'network_event.dart';
 
 /// The fields a user can override for a given tape entry.
 /// All fields are optional — only the ones present are applied.
@@ -10,11 +13,17 @@ class TapeOverride {
   /// Replaces the outgoing request body (intercept mode only).
   final String? requestBodyOverride;
 
+  /// Encoding of [requestBodyOverride]: `"utf8"` (default) or `"base64"`.
+  final String? requestBodyOverrideEncoding;
+
   /// Replaces the response status code (replay + intercept).
   final int? statusCodeOverride;
 
   /// Replaces the response body (replay + intercept).
   final String? responseBodyOverride;
+
+  /// Encoding of [responseBodyOverride]: `"utf8"` (default) or `"base64"`.
+  final String? responseBodyOverrideEncoding;
 
   /// When true, [requestBodyOverride] is applied. When false, ignored.
   final bool requestBypass;
@@ -24,16 +33,22 @@ class TapeOverride {
 
   const TapeOverride({
     this.requestBodyOverride,
+    this.requestBodyOverrideEncoding,
     this.statusCodeOverride,
     this.responseBodyOverride,
+    this.responseBodyOverrideEncoding,
     this.requestBypass = false,
     this.responseBypass = false,
   });
 
   factory TapeOverride.fromJson(Map<String, dynamic> json) => TapeOverride(
         requestBodyOverride: json['requestBodyOverride'] as String?,
+        requestBodyOverrideEncoding:
+            json['requestBodyOverrideEncoding'] as String?,
         statusCodeOverride: json['statusCodeOverride'] as int?,
         responseBodyOverride: json['responseBodyOverride'] as String?,
+        responseBodyOverrideEncoding:
+            json['responseBodyOverrideEncoding'] as String?,
         requestBypass: json['requestBypass'] as bool? ?? true,
         responseBypass: json['responseBypass'] as bool? ?? true,
       );
@@ -41,6 +56,42 @@ class TapeOverride {
   bool get hasRequestOverride => requestBypass && requestBodyOverride != null;
   bool get hasResponseOverride =>
       responseBypass && (statusCodeOverride != null || responseBodyOverride != null);
+
+  /// Decodes [requestBodyOverride] into raw bytes.
+  Uint8List? get requestBodyOverrideBytes {
+    if (requestBodyOverride == null) return null;
+    if (requestBodyOverrideEncoding == 'base64') {
+      return base64Decode(requestBodyOverride!);
+    }
+    return Uint8List.fromList(utf8.encode(requestBodyOverride!));
+  }
+
+  /// Decodes [responseBodyOverride] into raw bytes.
+  Uint8List? get responseBodyOverrideBytes {
+    if (responseBodyOverride == null) return null;
+    if (responseBodyOverrideEncoding == 'base64') {
+      return base64Decode(responseBodyOverride!);
+    }
+    return Uint8List.fromList(utf8.encode(responseBodyOverride!));
+  }
+
+  /// Returns the encoded request body override as an [EncodedBody], or null.
+  EncodedBody? get requestBodyOverrideEncoded {
+    if (requestBodyOverride == null) return null;
+    return EncodedBody(
+      requestBodyOverride!,
+      requestBodyOverrideEncoding ?? 'utf8',
+    );
+  }
+
+  /// Returns the encoded response body override as an [EncodedBody], or null.
+  EncodedBody? get responseBodyOverrideEncoded {
+    if (responseBodyOverride == null) return null;
+    return EncodedBody(
+      responseBodyOverride!,
+      responseBodyOverrideEncoding ?? 'utf8',
+    );
+  }
 }
 
 /// Loads override files from `Documents/replicate_overrides/` and surfaces them
@@ -87,12 +138,12 @@ class InterceptPlayer {
         }
       }
 
-      if (kDebugMode) debugPrint('[InterceptPlayer] ✅ Loaded ${_overrides.length} overrides');
+      if (kDebugMode) debugPrint('[InterceptPlayer] Loaded ${_overrides.length} overrides');
       for (final k in _overrides.keys) {
         if (kDebugMode) debugPrint('[InterceptPlayer]   → $k');
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('[InterceptPlayer] ❌ load() error: $e');
+      if (kDebugMode) debugPrint('[InterceptPlayer] load() error: $e');
     }
   }
 

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -32,10 +33,44 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
     final timestamp = DateTime.now().toIso8601String();
     final stopwatch = Stopwatch()..start();
 
-    // Capture request body for non-streaming requests.
-    String? requestBody;
+    // Capture request body bytes from all request types.
+    Uint8List? requestBodyRaw;
+    String? requestContentType;
     if (request is http.Request && request.body.isNotEmpty) {
-      requestBody = request.body;
+      requestBodyRaw = Uint8List.fromList(utf8.encode(request.body));
+      requestContentType = request.headers['content-type'];
+    } else if (request is http.MultipartRequest) {
+      // Finalize to get the byte stream — we must reconstruct a StreamedRequest.
+      requestContentType = request.headers['content-type'] ??
+          'multipart/form-data; boundary=${request.hashCode}';
+      final finalized = request.finalize();
+      requestBodyRaw = await finalized.toBytes();
+      // Rebuild as a StreamedRequest so _inner.send() still works.
+      final replacement = http.StreamedRequest(request.method, request.url)
+        ..headers.addAll(request.headers);
+      replacement.contentLength = requestBodyRaw.length;
+      replacement.sink.add(requestBodyRaw);
+      // ignore: unawaited_futures
+      replacement.sink.close();
+      request = replacement;
+    } else if (request is http.StreamedRequest) {
+      requestContentType = request.headers['content-type'];
+      // Read the stream, then create a new StreamedRequest with the captured bytes.
+      final finalized = request.finalize();
+      requestBodyRaw = await finalized.toBytes();
+      final replacement = http.StreamedRequest(request.method, request.url)
+        ..headers.addAll(request.headers);
+      replacement.contentLength = requestBodyRaw.length;
+      replacement.sink.add(requestBodyRaw);
+      // ignore: unawaited_futures
+      replacement.sink.close();
+      request = replacement;
+    }
+
+    // Encode request body for tape storage.
+    EncodedBody? encodedReqBody;
+    if (requestBodyRaw != null && requestBodyRaw.isNotEmpty) {
+      encodedReqBody = NetworkEvent.encodeBody(requestBodyRaw, requestContentType);
     }
 
     // In replay mode: return recorded response without hitting the network.
@@ -45,7 +80,7 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
       if (client.isReplayMode) {
         final recorded = client.replay(request.method, request.url.toString());
         if (recorded != null) {
-          final bytes = utf8.encode(recorded.responseBody ?? '');
+          final bytes = recorded.responseBodyBytes;
           return http.StreamedResponse(
             Stream.value(bytes),
             recorded.statusCode ?? 200,
@@ -62,7 +97,7 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
         if (override != null) {
           if (override.hasRequestOverride) {
             request = _applyRequestOverride(request, override);
-            requestBody = override.requestBodyOverride ?? requestBody;
+            encodedReqBody = override.requestBodyOverrideEncoded;
           }
         }
 
@@ -71,22 +106,21 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
           final bytes = await response.stream.toBytes();
           stopwatch.stop();
 
-          String? responseBody;
-          try {
-            responseBody = utf8.decode(bytes);
-          } catch (_) {
-            responseBody = '<binary ${bytes.length} bytes>';
-          }
+          final respContentType = response.headers['content-type'];
+          final encodedRespBody = NetworkEvent.encodeBody(bytes, respContentType);
 
           final effectiveStatus = (override != null && override.hasResponseOverride && override.statusCodeOverride != null)
               ? override.statusCodeOverride!
               : response.statusCode;
-          final effectiveBody = (override != null && override.hasResponseOverride && override.responseBodyOverride != null)
-              ? override.responseBodyOverride!
-              : responseBody;
-          final effectiveBytes = (override != null && override.hasResponseOverride && override.responseBodyOverride != null)
-              ? utf8.encode(override.responseBodyOverride!)
-              : bytes;
+          final EncodedBody effectiveRespBody;
+          final Uint8List effectiveBytes;
+          if (override != null && override.hasResponseOverride && override.responseBodyOverride != null) {
+            effectiveRespBody = override.responseBodyOverrideEncoded!;
+            effectiveBytes = override.responseBodyOverrideBytes!;
+          } else {
+            effectiveRespBody = encodedRespBody;
+            effectiveBytes = Uint8List.fromList(bytes);
+          }
 
           _replicate.sendEvent(NetworkEvent(
             id: id,
@@ -94,10 +128,12 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
             method: request.method,
             url: request.url.toString(),
             requestHeaders: Map<String, String>.from(request.headers),
-            requestBody: requestBody,
+            requestBody: encodedReqBody?.body,
+            requestBodyEncoding: encodedReqBody?.encoding ?? 'utf8',
             statusCode: effectiveStatus,
             responseHeaders: Map<String, String>.from(response.headers),
-            responseBody: effectiveBody,
+            responseBody: effectiveRespBody.body,
+            responseBodyEncoding: effectiveRespBody.encoding,
             durationMs: stopwatch.elapsedMilliseconds,
             isSuccess: effectiveStatus >= 200 && effectiveStatus < 300,
           ));
@@ -127,12 +163,8 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
       final bytes = await response.stream.toBytes();
       stopwatch.stop();
 
-      String? responseBody;
-      try {
-        responseBody = utf8.decode(bytes);
-      } catch (_) {
-        responseBody = '<binary ${bytes.length} bytes>';
-      }
+      final respContentType = response.headers['content-type'];
+      final encodedRespBody = NetworkEvent.encodeBody(bytes, respContentType);
 
       if (kDebugMode) {
         debugPrint('''
@@ -152,10 +184,12 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
           method: request.method,
           url: request.url.toString(),
           requestHeaders: Map<String, String>.from(request.headers),
-          requestBody: requestBody,
+          requestBody: encodedReqBody?.body,
+          requestBodyEncoding: encodedReqBody?.encoding ?? 'utf8',
           statusCode: response.statusCode,
           responseHeaders: Map<String, String>.from(response.headers),
-          responseBody: responseBody,
+          responseBody: encodedRespBody.body,
+          responseBodyEncoding: encodedRespBody.encoding,
           durationMs: stopwatch.elapsedMilliseconds,
           isSuccess: response.statusCode >= 200 && response.statusCode < 300,
         ),
@@ -194,7 +228,8 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
           method: request.method,
           url: request.url.toString(),
           requestHeaders: Map<String, String>.from(request.headers),
-          requestBody: requestBody,
+          requestBody: encodedReqBody?.body,
+          requestBodyEncoding: encodedReqBody?.encoding ?? 'utf8',
           durationMs: stopwatch.elapsedMilliseconds,
           isSuccess: false,
         ),
@@ -213,11 +248,13 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
   /// Only applies to [http.Request] (non-streaming). Streaming requests are returned unchanged.
   http.BaseRequest _applyRequestOverride(http.BaseRequest request, TapeOverride override) {
     if (override.requestBodyOverride == null) return request;
-    if (request is! http.Request) return request;
+    // For any request type, replace body with the override bytes as a new Request.
+    final overrideBytes = override.requestBodyOverrideBytes;
+    if (overrideBytes == null) return request;
 
     final modified = http.Request(request.method, request.url)
       ..headers.addAll(request.headers)
-      ..body = override.requestBodyOverride!;
+      ..bodyBytes = overrideBytes;
     return modified;
   }
 }

@@ -26,14 +26,19 @@ class ReplicateDioInterceptor extends Interceptor {
   static const _kId = '_sv_id';
   static const _kTs = '_sv_timestamp';
   static const _kOverride = '_sv_override';
+  static const _kReqBody = '_sv_req_body';
+  static const _kReqBodyEnc = '_sv_req_body_enc';
 
   ReplicateDioInterceptor(this._replicate);
 
   @override
-  void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+  void onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
     options.extra[_kStart] = DateTime.now().millisecondsSinceEpoch;
     options.extra[_kId] = _uuid.v4();
     options.extra[_kTs] = DateTime.now().toIso8601String();
+
+    // Capture request body — handle FormData specially.
+    await _captureRequestBody(options);
 
     if (_replicate is ReplicateClient) {
       final client = _replicate as ReplicateClient;
@@ -42,11 +47,14 @@ class ReplicateDioInterceptor extends Interceptor {
       if (client.isReplayMode) {
         final recorded = client.replay(options.method.toUpperCase(), options.uri.toString());
         if (recorded != null) {
+          final bytes = recorded.responseBodyBytes;
           handler.resolve(
             Response(
               requestOptions: options,
               statusCode: recorded.statusCode ?? 200,
-              data: recorded.responseBody,
+              data: recorded.responseBodyEncoding == 'base64'
+                  ? bytes
+                  : recorded.responseBody,
               headers: Headers.fromMap(
                 (recorded.responseHeaders ?? {}).map((k, v) => MapEntry(k, [v])),
               ),
@@ -63,13 +71,62 @@ class ReplicateDioInterceptor extends Interceptor {
         if (override != null) {
           options.extra[_kOverride] = override;
           if (override.hasRequestOverride) {
-            options.data = override.requestBodyOverride;
+            final overrideBytes = override.requestBodyOverrideBytes;
+            if (overrideBytes != null) {
+              if (override.requestBodyOverrideEncoding == 'base64') {
+                options.data = Stream.fromIterable([overrideBytes]);
+                options.headers['content-length'] = overrideBytes.length.toString();
+              } else {
+                options.data = override.requestBodyOverride;
+              }
+            }
+            // Re-capture the overridden body for recording.
+            await _captureRequestBody(options);
           }
         }
       }
     }
 
     handler.next(options);
+  }
+
+  /// Captures the request body into extra fields for later recording.
+  Future<void> _captureRequestBody(RequestOptions options) async {
+    final data = options.data;
+    if (data == null) return;
+
+    if (data is FormData) {
+      try {
+        // Read the finalized multipart byte stream.
+        final contentType = 'multipart/form-data; boundary=${data.boundary}';
+        options.headers['content-type'] = contentType;
+        final byteChunks = await data.finalize().toList();
+        final bytes = byteChunks.expand((c) => c).toList();
+        final encoded = NetworkEvent.encodeBody(bytes, contentType);
+        options.extra[_kReqBody] = encoded.body;
+        options.extra[_kReqBodyEnc] = encoded.encoding;
+        // Replace data with the raw bytes so Dio sends the captured payload.
+        options.data = Stream.fromIterable([bytes]);
+        options.headers['content-length'] = bytes.length.toString();
+      } catch (_) {
+        // Fallback: store toString representation.
+        options.extra[_kReqBody] = data.toString();
+        options.extra[_kReqBodyEnc] = 'utf8';
+      }
+      return;
+    }
+
+    // Standard body types.
+    String? bodyStr;
+    try {
+      bodyStr = data is String ? data : jsonEncode(data);
+    } catch (_) {
+      bodyStr = data.toString();
+    }
+    if (bodyStr != null) {
+      options.extra[_kReqBody] = bodyStr;
+      options.extra[_kReqBodyEnc] = 'utf8';
+    }
   }
 
   @override
@@ -115,16 +172,9 @@ class ReplicateDioInterceptor extends Interceptor {
       if (v != null) requestHeaders[k] = v.toString();
     });
 
-    // Serialise request body.
-    String? requestBody;
-    final data = options.data;
-    if (data != null) {
-      try {
-        requestBody = data is String ? data : jsonEncode(data);
-      } catch (_) {
-        requestBody = data.toString();
-      }
-    }
+    // Use pre-captured request body if available.
+    final requestBody = options.extra[_kReqBody] as String?;
+    final requestBodyEncoding = options.extra[_kReqBodyEnc] as String? ?? 'utf8';
 
     // Resolve response (may come from a successful response or an error that
     // still carries a response, e.g. a 4xx/5xx).
@@ -133,16 +183,24 @@ class ReplicateDioInterceptor extends Interceptor {
 
     Map<String, String>? responseHeaders;
     String? responseBody;
+    String responseBodyEncoding = 'utf8';
     if (resp != null) {
       responseHeaders = {};
       resp.headers.forEach((k, v) => responseHeaders![k] = v.join(', '));
 
       final body = resp.data;
       if (body != null) {
-        try {
-          responseBody = body is String ? body : jsonEncode(body);
-        } catch (_) {
-          responseBody = body.toString();
+        if (body is List<int>) {
+          final respContentType = responseHeaders['content-type'];
+          final encoded = NetworkEvent.encodeBody(body, respContentType);
+          responseBody = encoded.body;
+          responseBodyEncoding = encoded.encoding;
+        } else {
+          try {
+            responseBody = body is String ? body : jsonEncode(body);
+          } catch (_) {
+            responseBody = body.toString();
+          }
         }
       }
     }
@@ -154,9 +212,11 @@ class ReplicateDioInterceptor extends Interceptor {
       url: options.uri.toString(),
       requestHeaders: requestHeaders,
       requestBody: requestBody,
+      requestBodyEncoding: requestBodyEncoding,
       statusCode: statusCode,
       responseHeaders: responseHeaders,
       responseBody: responseBody,
+      responseBodyEncoding: responseBodyEncoding,
       durationMs: durationMs,
       isSuccess: statusCode != null && statusCode >= 200 && statusCode < 300,
     ));

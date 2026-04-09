@@ -90,8 +90,20 @@ class ReplicateHttpClientWrapper extends http.BaseClient {
         }
       }
 
-      // In intercept mode: modify request and/or response, always hit real network.
+      // In intercept mode: check manual tape entries first, then real network.
       if (client.isInterceptMode) {
+        // Manual tape entries are served without hitting the network.
+        final manualEntry = client.replayManualEntry(request.method, request.url.toString());
+        if (manualEntry != null) {
+          final bytes = manualEntry.responseBodyBytes;
+          return http.StreamedResponse(
+            Stream.value(bytes),
+            manualEntry.statusCode ?? 200,
+            contentLength: bytes.length,
+            headers: manualEntry.responseHeaders ?? {},
+          );
+        }
+
         final override = client.intercept(request.method, request.url.toString());
         if (kDebugMode) debugPrint('🎯 [http] intercept ${request.method} ${request.url} → override=$override');
         if (override != null) {

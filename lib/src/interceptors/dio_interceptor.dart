@@ -65,8 +65,26 @@ class ReplicateDioInterceptor extends Interceptor {
         }
       }
 
-      // In intercept mode: optionally modify request body; stash override for onResponse.
+      // In intercept mode: check manual tape entries first, then real network.
       if (client.isInterceptMode) {
+        final manualEntry = client.replayManualEntry(options.method.toUpperCase(), options.uri.toString());
+        if (manualEntry != null) {
+          handler.resolve(
+            Response(
+              requestOptions: options,
+              statusCode: manualEntry.statusCode ?? 200,
+              data: manualEntry.responseBodyEncoding == 'base64'
+                  ? manualEntry.responseBodyBytes
+                  : manualEntry.responseBody,
+              headers: Headers.fromMap(
+                (manualEntry.responseHeaders ?? {}).map((k, v) => MapEntry(k, [v])),
+              ),
+            ),
+            true,
+          );
+          return;
+        }
+
         final override = client.intercept(options.method.toUpperCase(), options.uri.toString());
         if (override != null) {
           options.extra[_kOverride] = override;

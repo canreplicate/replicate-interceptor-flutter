@@ -289,8 +289,14 @@ class _ReplicateHttpClientRequest implements HttpClientRequest {
         }
       }
 
-      // In intercept mode: optionally replace request body, then apply response overrides.
+      // In intercept mode: check manual tape entries first, then real network.
       if (client.isInterceptMode) {
+        final manualEntry = client.replayManualEntry(_method, _url);
+        if (manualEntry != null) {
+          _inner.abort();
+          return _ReplicateReplayResponse(manualEntry);
+        }
+
         final override = client.intercept(_method, _url);
         if (override != null && override.hasRequestOverride) {
           // dart:io doesn't let us rewrite bytes already written to _inner.

@@ -77,6 +77,10 @@ class NetworkEvent {
   /// True when [statusCode] is in the 200–299 range.
   final bool isSuccess;
 
+  /// `"recorded"` (default) or `"manual"`. Manual entries are created by the
+  /// user in the Replicate UI and take priority during replay.
+  final String source;
+
   const NetworkEvent({
     required this.id,
     required this.timestamp,
@@ -91,6 +95,7 @@ class NetworkEvent {
     this.responseBodyEncoding = 'utf8',
     required this.durationMs,
     required this.isSuccess,
+    this.source = 'recorded',
   });
 
   factory NetworkEvent.fromJson(Map<String, dynamic> json) => NetworkEvent(
@@ -113,6 +118,7 @@ class NetworkEvent {
             json['responseBodyEncoding'] as String? ?? 'utf8',
         durationMs: json['durationMs'] as int? ?? 0,
         isSuccess: json['isSuccess'] as bool? ?? false,
+        source: json['source'] as String? ?? 'recorded',
       );
 
   Map<String, dynamic> toJson() => {
@@ -129,6 +135,7 @@ class NetworkEvent {
         'responseBodyEncoding': responseBodyEncoding,
         'durationMs': durationMs,
         'isSuccess': isSuccess,
+        'source': source,
       };
 
   /// Decodes [requestBody] into raw bytes based on [requestBodyEncoding].

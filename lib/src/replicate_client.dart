@@ -40,10 +40,13 @@ class ReplicateClient implements NetworkEventSink {
     }
 
     if (mode == 'intercept') {
-      if (kDebugMode) debugPrint('🎯 [ReplicateClient] INTERCEPT MODE — loading override files');
+      if (kDebugMode) debugPrint('🎯 [ReplicateClient] INTERCEPT MODE — loading override + manual tape files');
       _interceptPlayer = InterceptPlayer();
       await _interceptPlayer!.load();
-      if (kDebugMode) debugPrint('🎯 [ReplicateClient] InterceptPlayer loaded. isInterceptMode = $isInterceptMode');
+      // Also load tape for manual entries — they should be served even in intercept mode.
+      _tapePlayer = TapePlayer();
+      await _tapePlayer!.load();
+      if (kDebugMode) debugPrint('🎯 [ReplicateClient] InterceptPlayer + TapePlayer loaded. isInterceptMode = $isInterceptMode');
       return;
     }
 
@@ -54,6 +57,18 @@ class ReplicateClient implements NetworkEventSink {
   /// no tape entry matches (caller should fall through to real network).
   NetworkEvent? replay(String method, String url) =>
       _active ? _tapePlayer?.play(method, url) : null;
+
+  /// In intercept mode: returns a manual tape entry for [method] + [url]
+  /// if one exists. Manual entries are served without hitting the network.
+  /// Returns null if no manual entry matches (proceed to real network).
+  NetworkEvent? replayManualEntry(String method, String url) {
+    if (!_active || _tapePlayer == null) return null;
+    final event = _tapePlayer!.peek(method, url);
+    if (event != null && event.source == 'manual') {
+      return _tapePlayer!.play(method, url);
+    }
+    return null;
+  }
 
   /// Returns the [TapeOverride] for [method] + [url], or null if no override
   /// exists for this endpoint (caller should proceed with original request).

@@ -4,11 +4,11 @@ A Flutter package that automatically intercepts network traffic for
 **Replicate** — a macOS tool for saving, restoring, and replaying iOS Simulator
 app state and network sessions.
 
-The interceptor supports three modes: **record** (capture traffic to tape files),
-**replay** (return recorded responses offline), and **intercept** (tamper with
-live requests/responses). It also handles **secure storage persistence** —
-dumping and restoring `flutter_secure_storage` Keychain entries so login state
-survives snapshot restores.
+The interceptor supports two active modes: **record** (capture traffic to tape
+files) and **intercept** (tamper with live requests/responses, serve manual tape
+entries without hitting the network). It also handles **secure storage
+persistence** — dumping and restoring `flutter_secure_storage` Keychain entries
+so login state survives snapshot restores.
 
 Activation is controlled by a `replicate_session.json` file that Replicate writes
 to the app's Documents directory before launching. When this file is absent
@@ -128,15 +128,16 @@ No additional setup needed. `ReplicateInterceptor.init()` installs a global
 | Mode | Network | What happens |
 |------|---------|--------------|
 | `record` | Real | Every request/response saved to tape. Keystore dumped automatically. |
-| `replay` | None | Recorded responses returned (FIFO per endpoint). Cache miss falls through to real network. |
-| `intercept` | Real | Outgoing request body can be modified; response status/body can be overridden. |
+| `intercept` | Real (except manual entries) | Manual tape entries served locally without network. Outgoing request body can be modified; response status/body can be overridden. |
 | `dump_keystore` | None | Dumps keystore to file and returns. Used by Quick Save. |
 | `restore_only` | None | Restores keystore then stays inactive. Used by Quick Save restore. |
+
+> **Note:** `replay` mode still exists in the package code for backwards compatibility but is no longer triggered by the Replicate macOS app. Session Records use `intercept` mode exclusively.
 
 The mode is set by Replicate via `Documents/replicate_session.json`:
 
 ```json
-{"sessionId": "93c8dc3f-...", "mode": "replay", "restoreKeystore": true}
+{"sessionId": "93c8dc3f-...", "mode": "intercept", "restoreKeystore": true}
 ```
 
 The `restoreKeystore` field is only present when Replicate has injected a
@@ -167,9 +168,9 @@ the app with `mode: "dump_keystore"`. The interceptor dumps the keystore and
 Replicate copies the file into the snapshot directory. This adds ~2-3 seconds.
 
 **On restore (Session Record):** Replicate writes the keystore file back into
-`Documents/` and sets `restoreKeystore: true` in the session config (replay or
-intercept mode). On `init()`, the interceptor restores Keychain entries, deletes
-the plaintext file, then activates the requested mode.
+`Documents/` and sets `restoreKeystore: true` in the session config (intercept
+mode). On `init()`, the interceptor restores Keychain entries, deletes the
+plaintext file, then activates intercept mode.
 
 **On restore (Quick Save):** Same keystore injection, but with
 `mode: "restore_only"`. The interceptor restores Keychain entries then stays
@@ -188,17 +189,6 @@ Keychain entries (i.e. logged out).
   runtime `kReleaseMode` check — they are complete no-ops in release builds.
 - The plaintext file is deleted immediately after restore.
 - **Never ship this package in a release build.**
-
-### What gets captured
-
-`flutter_secure_storage` is a flat key-value store shared across the entire
-app. Dumping captures *all* keys, including entries from third-party SDKs
-(analytics, crash reporting, payment SDKs). Restoring stale third-party keys
-may cause unexpected behaviour.
-
-- **v1:** All keys are captured. This is a known limitation.
-- **Future:** Optional key prefix filter via
-  `ReplicateInterceptor.init(keystoreKeys: ['auth_token', 'refresh_token'])`.
 
 ### Simulator-only
 
@@ -226,12 +216,30 @@ bool ReplicateInterceptor.isActive;
 
 ---
 
+## Binary and multipart body support
+
+Binary request and response bodies are fully supported. The interceptor detects
+the content-type and stores either a UTF-8 string or a base64-encoded string:
+
+| Content-type | Encoding in tape |
+|---|---|
+| `application/json`, `text/*`, `application/xml`, `application/x-www-form-urlencoded` | `"utf8"` |
+| `multipart/form-data`, `image/*`, `application/octet-stream`, everything else | `"base64"` |
+
+`package:http` captures `StreamedRequest` and `MultipartRequest` bodies by
+finalising the stream before forwarding. Dio captures `FormData` by finalising
+to a byte stream. `dart:io` uses the same content-type detection instead of the
+old `<binary N bytes>` placeholder.
+
+Old tape files without `requestBodyEncoding`/`responseBodyEncoding` fields are
+treated as `"utf8"` — full backwards compatibility.
+
 ## Known limitations
 
-- **Binary bodies:** Binary response bodies (images, protobuf, etc.) are
-  stored as `<binary N bytes>` in tape files rather than base64-encoded.
-  These entries replay as that placeholder string, not the original bytes.
 - **Replay cache miss:** If the app makes a request that wasn't recorded in
   the tape, the interceptor falls through to the real network.
 - **Web platform:** `dart:io` is not available on the web; this package
   targets iOS / Android / macOS / Linux / Windows Flutter targets only.
+- **All keystore keys captured:** `flutter_secure_storage` is a flat key-value
+  store shared across the entire app. All keys are dumped, including entries
+  from third-party SDKs. A key prefix filter is a future enhancement.

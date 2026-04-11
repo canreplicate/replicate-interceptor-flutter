@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'network_event.dart';
 
 /// The fields a user can override for a given tape entry.
 /// All fields are optional — only the ones present are applied.
@@ -10,30 +13,88 @@ class TapeOverride {
   /// Replaces the outgoing request body (intercept mode only).
   final String? requestBodyOverride;
 
+  /// Encoding of [requestBodyOverride]: `"utf8"` (default) or `"base64"`.
+  final String? requestBodyOverrideEncoding;
+
   /// Replaces the response status code (replay + intercept).
   final int? statusCodeOverride;
 
   /// Replaces the response body (replay + intercept).
   final String? responseBodyOverride;
 
+  /// Encoding of [responseBodyOverride]: `"utf8"` (default) or `"base64"`.
+  final String? responseBodyOverrideEncoding;
+
+  /// When true, [requestBodyOverride] is applied. When false, ignored.
+  final bool requestBypass;
+
+  /// When true, [statusCodeOverride] and [responseBodyOverride] are applied.
+  final bool responseBypass;
+
   const TapeOverride({
     this.requestBodyOverride,
+    this.requestBodyOverrideEncoding,
     this.statusCodeOverride,
     this.responseBodyOverride,
+    this.responseBodyOverrideEncoding,
+    this.requestBypass = false,
+    this.responseBypass = false,
   });
 
   factory TapeOverride.fromJson(Map<String, dynamic> json) => TapeOverride(
         requestBodyOverride: json['requestBodyOverride'] as String?,
+        requestBodyOverrideEncoding:
+            json['requestBodyOverrideEncoding'] as String?,
         statusCodeOverride: json['statusCodeOverride'] as int?,
         responseBodyOverride: json['responseBodyOverride'] as String?,
+        responseBodyOverrideEncoding:
+            json['responseBodyOverrideEncoding'] as String?,
+        requestBypass: json['requestBypass'] as bool? ?? true,
+        responseBypass: json['responseBypass'] as bool? ?? true,
       );
 
-  bool get hasRequestOverride => requestBodyOverride != null;
+  bool get hasRequestOverride => requestBypass && requestBodyOverride != null;
   bool get hasResponseOverride =>
-      statusCodeOverride != null || responseBodyOverride != null;
+      responseBypass && (statusCodeOverride != null || responseBodyOverride != null);
+
+  /// Decodes [requestBodyOverride] into raw bytes.
+  Uint8List? get requestBodyOverrideBytes {
+    if (requestBodyOverride == null) return null;
+    if (requestBodyOverrideEncoding == 'base64') {
+      return base64Decode(requestBodyOverride!);
+    }
+    return Uint8List.fromList(utf8.encode(requestBodyOverride!));
+  }
+
+  /// Decodes [responseBodyOverride] into raw bytes.
+  Uint8List? get responseBodyOverrideBytes {
+    if (responseBodyOverride == null) return null;
+    if (responseBodyOverrideEncoding == 'base64') {
+      return base64Decode(responseBodyOverride!);
+    }
+    return Uint8List.fromList(utf8.encode(responseBodyOverride!));
+  }
+
+  /// Returns the encoded request body override as an [EncodedBody], or null.
+  EncodedBody? get requestBodyOverrideEncoded {
+    if (requestBodyOverride == null) return null;
+    return EncodedBody(
+      requestBodyOverride!,
+      requestBodyOverrideEncoding ?? 'utf8',
+    );
+  }
+
+  /// Returns the encoded response body override as an [EncodedBody], or null.
+  EncodedBody? get responseBodyOverrideEncoded {
+    if (responseBodyOverride == null) return null;
+    return EncodedBody(
+      responseBodyOverride!,
+      responseBodyOverrideEncoding ?? 'utf8',
+    );
+  }
 }
 
-/// Loads override files from `Documents/simvault_overrides/` and surfaces them
+/// Loads override files from `Documents/replicate_overrides/` and surfaces them
 /// per `"METHOD url"` key for use in intercept mode.
 ///
 /// Unlike [TapePlayer], overrides are not consumed (no FIFO) — the same
@@ -41,15 +102,15 @@ class TapeOverride {
 class InterceptPlayer {
   final _overrides = <String, TapeOverride>{};
 
-  /// Reads all `*.json` files from `Documents/simvault_overrides/` and builds
+  /// Reads all `*.json` files from `Documents/replicate_overrides/` and builds
   /// the in-memory override map.
   Future<void> load() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final overridesDir = Directory('${dir.path}/simvault_overrides');
+      final overridesDir = Directory('${dir.path}/replicate_overrides');
 
       if (!await overridesDir.exists()) {
-        if (kDebugMode) debugPrint('[InterceptPlayer] simvault_overrides/ not found — nothing to load');
+        if (kDebugMode) debugPrint('[InterceptPlayer] replicate_overrides/ not found — nothing to load');
         return;
       }
 
@@ -65,7 +126,7 @@ class InterceptPlayer {
 
           // Each override file has a "method" + "url" field so we can build
           // the lookup key. These are copied from the original tape entry by
-          // SimVault when it creates the override file.
+          // Replicate when it creates the override file.
           final method = raw['method'] as String?;
           final url = raw['url'] as String?;
           if (method == null || url == null) continue;
@@ -77,12 +138,12 @@ class InterceptPlayer {
         }
       }
 
-      if (kDebugMode) debugPrint('[InterceptPlayer] ✅ Loaded ${_overrides.length} overrides');
+      if (kDebugMode) debugPrint('[InterceptPlayer] Loaded ${_overrides.length} overrides');
       for (final k in _overrides.keys) {
         if (kDebugMode) debugPrint('[InterceptPlayer]   → $k');
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('[InterceptPlayer] ❌ load() error: $e');
+      if (kDebugMode) debugPrint('[InterceptPlayer] load() error: $e');
     }
   }
 

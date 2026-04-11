@@ -1,28 +1,29 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../intercept_player.dart';
 import '../network_event.dart';
-import '../simvault_client.dart';
+import '../replicate_client.dart';
 
 /// Sets `HttpOverrides.global` so that every [dart:io] [HttpClient] created
-/// after [SimVaultInterceptor.init] is automatically intercepted — including
+/// after [ReplicateInterceptor.init] is automatically intercepted — including
 /// clients created inside third-party packages.
 ///
 /// The previous [HttpOverrides] (if any) is preserved via composition so other
 /// overrides (e.g. from `flutter_test`) keep working.
-class SimVaultHttpOverrides extends HttpOverrides {
+class ReplicateHttpOverrides extends HttpOverrides {
   final HttpOverrides? _previous;
-  final NetworkEventSink _simvault;
+  final NetworkEventSink _replicate;
 
-  SimVaultHttpOverrides({
+  ReplicateHttpOverrides({
     required NetworkEventSink client,
     HttpOverrides? previous,
-  })  : _simvault = client,
+  })  : _replicate = client,
         _previous = previous;
 
   @override
@@ -30,21 +31,21 @@ class SimVaultHttpOverrides extends HttpOverrides {
     final inner = _previous != null
         ? _previous.createHttpClient(context)
         : super.createHttpClient(context);
-    return _SimVaultHttpClient(inner, _simvault);
+    return _ReplicateHttpClient(inner, _replicate);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _SimVaultHttpClient
+// _ReplicateHttpClient
 // Delegates everything to [_inner]; overrides open*/get*/post*/… so that the
 // returned request is wrapped.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _SimVaultHttpClient implements HttpClient {
+class _ReplicateHttpClient implements HttpClient {
   final HttpClient _inner;
-  final NetworkEventSink _simvault;
+  final NetworkEventSink _replicate;
 
-  _SimVaultHttpClient(this._inner, this._simvault);
+  _ReplicateHttpClient(this._inner, this._replicate);
 
   Future<HttpClientRequest> _wrap(
     Future<HttpClientRequest> future,
@@ -54,7 +55,7 @@ class _SimVaultHttpClient implements HttpClient {
     final req = await future;
     // Pass _inner (the real unwrapped HttpClient) so _sendWithOverriddenBody
     // can open a fresh connection without going through HttpOverrides again.
-    return _SimVaultHttpClientRequest(req, _simvault, method, url, _inner);
+    return _ReplicateHttpClientRequest(req, _replicate, method, url, _inner);
   }
 
   // ---- Request factories ----
@@ -194,13 +195,13 @@ class _SimVaultHttpClient implements HttpClient {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _SimVaultHttpClientRequest
+// _ReplicateHttpClientRequest
 // Captures bytes written to the sink; wraps close() to intercept the response.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _SimVaultHttpClientRequest implements HttpClientRequest {
+class _ReplicateHttpClientRequest implements HttpClientRequest {
   final HttpClientRequest _inner;
-  final NetworkEventSink _simvault;
+  final NetworkEventSink _replicate;
   final String _method;
   final String _url;
   // The real (unwrapped) HttpClient — used by _sendWithOverriddenBody to avoid
@@ -215,8 +216,8 @@ class _SimVaultHttpClientRequest implements HttpClientRequest {
   // Memoised future so that both close() and done return the same instance.
   Future<HttpClientResponse>? _closeFuture;
 
-  _SimVaultHttpClientRequest(
-      this._inner, this._simvault, this._method, this._url, this._rawClient);
+  _ReplicateHttpClientRequest(
+      this._inner, this._replicate, this._method, this._url, this._rawClient);
 
   // ---- Body interception ----
 
@@ -270,22 +271,34 @@ class _SimVaultHttpClientRequest implements HttpClientRequest {
   }
 
   Future<HttpClientResponse> _doClose() async {
-    if (_simvault is SimVaultClient) {
-      final client = _simvault as SimVaultClient;
+    // Determine content-type for encoding decision.
+    String? reqContentType;
+    try {
+      reqContentType = _inner.headers.contentType?.toString();
+    } catch (_) {}
+
+    if (_replicate is ReplicateClient) {
+      final client = _replicate as ReplicateClient;
 
       // In replay mode: return recorded response without touching the network.
       if (client.isReplayMode) {
         final recorded = client.replay(_method, _url);
         if (recorded != null) {
           _inner.abort();
-          return _SimVaultReplayResponse(recorded);
+          return _ReplicateReplayResponse(recorded);
         }
       }
 
-      // In intercept mode: optionally replace request body, then apply response overrides.
+      // In intercept mode: check manual tape entries first, then real network.
       if (client.isInterceptMode) {
+        final manualEntry = client.replayManualEntry(_method, _url);
+        if (manualEntry != null) {
+          _inner.abort();
+          return _ReplicateReplayResponse(manualEntry);
+        }
+
         final override = client.intercept(_method, _url);
-        if (override != null && override.requestBodyOverride != null) {
+        if (override != null && override.hasRequestOverride) {
           // dart:io doesn't let us rewrite bytes already written to _inner.
           // Abort this request and open a fresh one with the overridden body.
           _inner.abort();
@@ -297,7 +310,7 @@ class _SimVaultHttpClientRequest implements HttpClientRequest {
           // No request change — send normally, wrap response on the way back.
           final response = await _inner.close();
           _stopwatch.stop();
-          return _SimVaultInterceptResponse(response, override);
+          return _ReplicateInterceptResponse(response, override);
         }
       }
     }
@@ -311,25 +324,22 @@ class _SimVaultHttpClientRequest implements HttpClientRequest {
       reqHeaders[name] = values.join(', ');
     });
 
-    String? requestBody;
+    // Encode request body using content-type detection.
+    EncodedBody? encodedReqBody;
     if (_bodyBytes.isNotEmpty) {
-      try {
-        requestBody = utf8.decode(_bodyBytes);
-      } catch (_) {
-        requestBody = '<binary ${_bodyBytes.length} bytes>';
-      }
+      encodedReqBody = NetworkEvent.encodeBody(_bodyBytes, reqContentType);
     }
 
-    return _SimVaultHttpClientResponse(
+    return _ReplicateHttpClientResponse(
       response,
-      _simvault,
+      _replicate,
       _method,
       _url,
       _id,
       _timestamp,
       _stopwatch.elapsedMilliseconds,
       reqHeaders,
-      requestBody,
+      encodedReqBody,
     );
   }
 
@@ -353,19 +363,20 @@ class _SimVaultHttpClientRequest implements HttpClientRequest {
         }
       });
 
-      final bodyBytes = utf8.encode(override.requestBodyOverride!);
+      final bodyBytes = override.requestBodyOverrideBytes ??
+          utf8.encode(override.requestBodyOverride!);
       newRequest.contentLength = bodyBytes.length;
       newRequest.add(bodyBytes);
 
       final response = await newRequest.close();
-      // Do NOT close _rawClient — it is shared and managed by _SimVaultHttpClient.
+      // Do NOT close _rawClient — it is shared and managed by _ReplicateHttpClient.
 
       if (override.hasResponseOverride) {
-        return _SimVaultInterceptResponse(response, override);
+        return _ReplicateInterceptResponse(response, override);
       }
       return response;
     } catch (e) {
-      if (kDebugMode) debugPrint('[SimVault] ❌ dart:io intercept body override failed: $e');
+      if (kDebugMode) debugPrint('[Replicate] dart:io intercept body override failed: $e');
       return null;
     }
   }
@@ -433,26 +444,26 @@ class _SimVaultHttpClientRequest implements HttpClientRequest {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _SimVaultHttpClientResponse
-// Wraps the response Stream to capture the body; fires the SimVault event
+// _ReplicateHttpClientResponse
+// Wraps the response Stream to capture the body; fires the Replicate event
 // once the stream is fully consumed.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _SimVaultHttpClientResponse extends Stream<List<int>>
+class _ReplicateHttpClientResponse extends Stream<List<int>>
     implements HttpClientResponse {
   final HttpClientResponse _inner;
-  final NetworkEventSink _simvault;
+  final NetworkEventSink _replicate;
   final String _method;
   final String _url;
   final String _id;
   final String _timestamp;
   final int _durationMs;
   final Map<String, String> _reqHeaders;
-  final String? _requestBody;
+  final EncodedBody? _requestBody;
 
-  _SimVaultHttpClientResponse(
+  _ReplicateHttpClientResponse(
     this._inner,
-    this._simvault,
+    this._replicate,
     this._method,
     this._url,
     this._id,
@@ -488,25 +499,25 @@ class _SimVaultHttpClientResponse extends Stream<List<int>>
     final respHeaders = <String, String>{};
     _inner.headers.forEach((k, v) => respHeaders[k] = v.join(', '));
 
-    String? responseBody;
+    // Encode response body using content-type detection.
+    EncodedBody? encodedRespBody;
     if (bytes.isNotEmpty) {
-      try {
-        responseBody = utf8.decode(bytes);
-      } catch (_) {
-        responseBody = '<binary ${bytes.length} bytes>';
-      }
+      final respContentType = respHeaders['content-type'];
+      encodedRespBody = NetworkEvent.encodeBody(bytes, respContentType);
     }
 
-    _simvault.sendEvent(NetworkEvent(
+    _replicate.sendEvent(NetworkEvent(
       id: _id,
       timestamp: _timestamp,
       method: _method,
       url: _url,
       requestHeaders: _reqHeaders,
-      requestBody: _requestBody,
+      requestBody: _requestBody?.body,
+      requestBodyEncoding: _requestBody?.encoding ?? 'utf8',
       statusCode: _inner.statusCode,
       responseHeaders: respHeaders,
-      responseBody: responseBody,
+      responseBody: encodedRespBody?.body,
+      responseBodyEncoding: encodedRespBody?.encoding ?? 'utf8',
       durationMs: _durationMs,
       isSuccess: _inner.statusCode >= 200 && _inner.statusCode < 300,
     ));
@@ -561,21 +572,22 @@ class _SimVaultHttpClientResponse extends Stream<List<int>>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _SimVaultInterceptResponse
+// _ReplicateInterceptResponse
 // Wraps a real HttpClientResponse but overrides status code and/or body bytes
 // when a TapeOverride specifies them. Used in intercept mode.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _SimVaultInterceptResponse extends Stream<List<int>>
+class _ReplicateInterceptResponse extends Stream<List<int>>
     implements HttpClientResponse {
   final HttpClientResponse _inner;
   final TapeOverride _override;
-  late final List<int> _overrideBytes;
+  late final Uint8List _overrideBytes;
 
-  _SimVaultInterceptResponse(this._inner, this._override) {
-    _overrideBytes = _override.responseBodyOverride != null
-        ? utf8.encode(_override.responseBodyOverride!)
-        : [];
+  _ReplicateInterceptResponse(this._inner, this._override) {
+    _overrideBytes = _override.responseBodyOverrideBytes ??
+        (_override.responseBodyOverride != null
+            ? Uint8List.fromList(utf8.encode(_override.responseBodyOverride!))
+            : Uint8List(0));
   }
 
   @override
@@ -643,18 +655,18 @@ class _SimVaultInterceptResponse extends Stream<List<int>>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _SimVaultReplayResponse
+// _ReplicateReplayResponse
 // Synthesised HttpClientResponse returned when a tape entry matches a request.
 // The real network is never contacted.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _SimVaultReplayResponse extends Stream<List<int>>
+class _ReplicateReplayResponse extends Stream<List<int>>
     implements HttpClientResponse {
   final NetworkEvent _event;
-  final List<int> _bodyBytes;
+  final Uint8List _bodyBytes;
 
-  _SimVaultReplayResponse(this._event)
-      : _bodyBytes = utf8.encode(_event.responseBody ?? '');
+  _ReplicateReplayResponse(this._event)
+      : _bodyBytes = _event.responseBodyBytes;
 
   @override
   int get statusCode => _event.statusCode ?? 200;
@@ -721,7 +733,7 @@ class _SimVaultReplayResponse extends Stream<List<int>>
 // ─────────────────────────────────────────────────────────────────────────────
 // _MapHttpHeaders
 // Minimal HttpHeaders implementation backed by a plain Map, used by
-// _SimVaultReplayResponse to surface recorded response headers.
+// _ReplicateReplayResponse to surface recorded response headers.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _MapHttpHeaders implements HttpHeaders {

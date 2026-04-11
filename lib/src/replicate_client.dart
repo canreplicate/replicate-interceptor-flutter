@@ -7,10 +7,10 @@ import 'intercept_player.dart';
 import 'network_event.dart';
 import 'tape_player.dart';
 
-class SimVaultClient implements NetworkEventSink {
-  SimVaultClient._internal();
-  static final SimVaultClient _instance = SimVaultClient._internal();
-  factory SimVaultClient() => _instance;
+class ReplicateClient implements NetworkEventSink {
+  ReplicateClient._internal();
+  static final ReplicateClient _instance = ReplicateClient._internal();
+  factory ReplicateClient() => _instance;
 
   String? _sessionId;
   TapePlayer? _tapePlayer;
@@ -23,8 +23,8 @@ class SimVaultClient implements NetworkEventSink {
   bool get isActive => _active;
 
   /// [mode] is `'record'` (default), `'replay'`, or `'intercept'`.
-  /// It is passed from [SimVaultInterceptor.init] which reads it from
-  /// `Documents/simvault_session.json` written by the SimVault desktop app.
+  /// It is passed from [ReplicateInterceptor.init] which reads it from
+  /// `Documents/replicate_session.json` written by the Replicate desktop app.
   Future<void> init({
     required String sessionId,
     String mode = 'record',
@@ -33,27 +33,42 @@ class SimVaultClient implements NetworkEventSink {
     _active = true;
 
     if (mode == 'replay') {
-      if (kDebugMode) debugPrint('🎬 [SimVaultClient] REPLAY MODE — loading tape files');
+      if (kDebugMode) debugPrint('🎬 [ReplicateClient] REPLAY MODE — loading tape files');
       _tapePlayer = TapePlayer();
       await _tapePlayer!.load();
       return;
     }
 
     if (mode == 'intercept') {
-      if (kDebugMode) debugPrint('🎯 [SimVaultClient] INTERCEPT MODE — loading override files');
+      if (kDebugMode) debugPrint('🎯 [ReplicateClient] INTERCEPT MODE — loading override + manual tape files');
       _interceptPlayer = InterceptPlayer();
       await _interceptPlayer!.load();
-      if (kDebugMode) debugPrint('🎯 [SimVaultClient] InterceptPlayer loaded. isInterceptMode = $isInterceptMode');
+      // Also load tape for manual entries — they should be served even in intercept mode.
+      _tapePlayer = TapePlayer();
+      await _tapePlayer!.load();
+      if (kDebugMode) debugPrint('🎯 [ReplicateClient] InterceptPlayer + TapePlayer loaded. isInterceptMode = $isInterceptMode');
       return;
     }
 
-    if (kDebugMode) debugPrint('🔴 [SimVaultClient] RECORD MODE');
+    if (kDebugMode) debugPrint('🔴 [ReplicateClient] RECORD MODE');
   }
 
   /// Returns the next recorded response for [method] + [url], or null if
   /// no tape entry matches (caller should fall through to real network).
   NetworkEvent? replay(String method, String url) =>
       _active ? _tapePlayer?.play(method, url) : null;
+
+  /// In intercept mode: returns a manual tape entry for [method] + [url]
+  /// if one exists. Manual entries are served without hitting the network.
+  /// Returns null if no manual entry matches (proceed to real network).
+  NetworkEvent? replayManualEntry(String method, String url) {
+    if (!_active || _tapePlayer == null) return null;
+    final event = _tapePlayer!.peek(method, url);
+    if (event != null && event.source == 'manual') {
+      return _tapePlayer!.play(method, url);
+    }
+    return null;
+  }
 
   /// Returns the [TapeOverride] for [method] + [url], or null if no override
   /// exists for this endpoint (caller should proceed with original request).
@@ -77,7 +92,7 @@ class SimVaultClient implements NetworkEventSink {
   Future<void> _writeEventToFile(NetworkEvent event) async {
     try {
       final directory = await getApplicationDocumentsDirectory();
-      final tapeDir = Directory('${directory.path}/simvault_tape');
+      final tapeDir = Directory('${directory.path}/replicate_tape');
 
       if (!await tapeDir.exists()) {
         await tapeDir.create(recursive: true);
@@ -97,6 +112,6 @@ class SimVaultClient implements NetworkEventSink {
 
   void dispose() {
     _active = false;
-    if (kDebugMode) debugPrint('[SimVaultClient] Disposed');
+    if (kDebugMode) debugPrint('[ReplicateClient] Disposed');
   }
 }

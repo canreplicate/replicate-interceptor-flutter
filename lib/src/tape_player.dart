@@ -9,21 +9,21 @@ import 'network_event.dart';
 
 /// Loads recorded tape files and replays them FIFO per `METHOD url` key.
 ///
-/// Used when the app is launched with `SIMVAULT_MODE=replay`. Call [load]
+/// Used when the app is launched with `REPLICATE_MODE=replay`. Call [load]
 /// once on startup, then call [play] for each outgoing request.
 class TapePlayer {
   // "GET https://api.example.com/path" → ordered queue of recorded events
   final _queues = <String, Queue<NetworkEvent>>{};
 
-  /// Reads all `*.json` files from `Documents/simvault_tape/` and builds
+  /// Reads all `*.json` files from `Documents/replicate_tape/` and builds
   /// the in-memory replay map.
   Future<void> load() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final tapeDir = Directory('${dir.path}/simvault_tape');
+      final tapeDir = Directory('${dir.path}/replicate_tape');
 
       if (!await tapeDir.exists()) {
-        if (kDebugMode) debugPrint('[TapePlayer] ⚠️ simvault_tape/ not found — nothing to load');
+        if (kDebugMode) debugPrint('[TapePlayer] ⚠️ replicate_tape/ not found — nothing to load');
         return;
       }
 
@@ -33,15 +33,31 @@ class TapePlayer {
           .cast<File>()
           .toList();
 
+      // Parse all events, partitioning manual vs recorded.
+      final manual = <NetworkEvent>[];
+      final recorded = <NetworkEvent>[];
       for (final file in files) {
         try {
           final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
           final event = NetworkEvent.fromJson(json);
-          final key = '${event.method.toUpperCase()} ${event.url}';
-          (_queues[key] ??= Queue<NetworkEvent>()).add(event);
+          if (event.source == 'manual') {
+            manual.add(event);
+          } else {
+            recorded.add(event);
+          }
         } catch (e) {
           if (kDebugMode) debugPrint('[TapePlayer] Failed to parse ${file.path}: $e');
         }
+      }
+
+      // Build queues: manual entries first, then recorded (per endpoint).
+      for (final event in manual) {
+        final key = '${event.method.toUpperCase()} ${event.url}';
+        (_queues[key] ??= Queue<NetworkEvent>()).add(event);
+      }
+      for (final event in recorded) {
+        final key = '${event.method.toUpperCase()} ${event.url}';
+        (_queues[key] ??= Queue<NetworkEvent>()).add(event);
       }
 
       final total = _queues.values.fold(0, (s, q) => s + q.length);
@@ -49,6 +65,14 @@ class TapePlayer {
     } catch (e) {
       if (kDebugMode) debugPrint('[TapePlayer] load() error: $e');
     }
+  }
+
+  /// Returns the next [NetworkEvent] for [method] + [url] without consuming it.
+  NetworkEvent? peek(String method, String url) {
+    final key = '${method.toUpperCase()} $url';
+    final queue = _queues[key];
+    if (queue == null || queue.isEmpty) return null;
+    return queue.first;
   }
 
   /// Returns the next recorded [NetworkEvent] for [method] + [url], or

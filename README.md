@@ -1,7 +1,7 @@
 # replicate_interceptor
 
 A Flutter package that automatically intercepts network traffic for
-**Replicate** — a macOS tool for saving, restoring, and replaying iOS Simulator
+**[Replicate](https://github.com/canreplicate/replicate)** — a macOS tool for saving, restoring, and replaying iOS Simulator
 app state and network sessions.
 
 The interceptor supports two active modes: **record** (capture traffic to tape

@@ -1,8 +1,8 @@
 name: replicate_interceptor
 description: >
   Flutter interceptor package for the Replicate iOS Simulator developer tool
-version: 0.1.0
-homepage: https://canreplicate.com
+version: 0.1.0+1
+homepage: https://canreplicate.app
 
 environment:
   sdk: ^3.9.2

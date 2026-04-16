@@ -1,53 +1,18 @@
 # replicate_interceptor
 
-A Flutter package that automatically intercepts network traffic for
-**[Replicate](https://github.com/canreplicate/replicate)** — a macOS tool for saving, restoring, and replaying iOS Simulator
-app state and network sessions.
-
-The interceptor supports two active modes: **record** (capture traffic to tape
-files) and **intercept** (tamper with live requests/responses, serve manual tape
-entries without hitting the network). It also handles **secure storage
-persistence** — dumping and restoring `flutter_secure_storage` Keychain entries
-so login state survives snapshot restores.
-
-Activation is controlled by a `replicate_session.json` file that Replicate writes
-to the app's Documents directory before launching. When this file is absent
-(normal dev runs, CI, etc.) every method is a **complete no-op**, so it is safe
-to leave the interceptor in your codebase.
+This package is a companion for the [Replicate App](https://canreplicate.app) — install Replicate on your Mac, add this package to your Flutter app, and you're ready to record, restore, and tamper with your iOS Simulator sessions.
 
 ---
 
-## Important: init ordering
+[Replicate](https://canreplicate.app) is a macOS developer tool that lets you save and restore full iOS Simulator app state snapshots. It captures your app's data container, records all network traffic, and lets you tamper with requests and responses — so you can reproduce any app state instantly and test edge cases without touching production.
 
-`ReplicateInterceptor.init()` must be called **right after
-`WidgetsFlutterBinding.ensureInitialized()`** and **before** any auth/state
-initialisation or `runApp()`.
+[![Replicate](https://canreplicate.app/og-image.png)](https://canreplicate.app)
 
-The binding must be initialized first because `path_provider` (used internally
-to locate `Documents/replicate_session.json`) requires it. After that, `init()`
-must run before auth logic so that keystore restore completes before the app
-reads Keychain entries.
-
-```dart
-import 'package:replicate_interceptor/replicate_interceptor.dart';
-
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  // Right after binding init — before any auth/state setup
-  await ReplicateInterceptor.init();
-
-  // ... other setup (auth, providers, etc.) ...
-  runApp(const MyApp());
-}
-```
+This package hooks into your Flutter app's network layer. Replicate activates it on demand by writing a session config before launch. When that file is absent — normal dev runs, CI, production — every method is a **complete no-op**. Safe to leave in your codebase indefinitely.
 
 ---
 
-## Release builds
-
-**Never include `replicate_interceptor` in release builds.** Use a dev-only
-dependency or conditional import:
+## Install
 
 ```yaml
 # pubspec.yaml
@@ -55,191 +20,40 @@ dev_dependencies:
   replicate_interceptor: ^0.1.0
 ```
 
-Or use a conditional import so the interceptor code is tree-shaken in release:
-
-```dart
-import 'package:flutter/foundation.dart';
-
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  if (kDebugMode) {
-    await ReplicateInterceptor.init();
-  }
-  // ... other setup ...
-  runApp(const MyApp());
-}
-```
-
-The `KeystoreManager` has belt-and-suspenders guards: `assert(!kReleaseMode)`
-plus a runtime `kReleaseMode` check that makes every method a no-op. But
-the safest approach is to not ship the package at all.
-
 ---
 
-## Supported HTTP clients
+## Setup
 
-| Client | How it's intercepted |
-|--------|----------------------|
-| `package:http` | `ReplicateInterceptor.wrapHttpClient(client)` |
-| `Dio` | `ReplicateInterceptor.addDioInterceptor(dio)` |
-| `dart:io HttpClient` | Automatic via `HttpOverrides.global` |
-
----
-
-## Usage
-
-### 1. Initialise in `main()`
+Call `init()` right after `WidgetsFlutterBinding.ensureInitialized()`, before anything else:
 
 ```dart
 import 'package:replicate_interceptor/replicate_interceptor.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await ReplicateInterceptor.init();  // right after binding init
+  await ReplicateInterceptor.init();
   runApp(const MyApp());
 }
 ```
 
-### 2. Wrap your HTTP clients
-
-#### `package:http`
+Then wrap your HTTP clients:
 
 ```dart
+// package:http
 final client = ReplicateInterceptor.wrapHttpClient(http.Client());
-final response = await client.get(Uri.parse('https://api.example.com/data'));
+
+// Dio
+ReplicateInterceptor.addDioInterceptor(dio);
+
+// dart:io HttpClient — no setup needed, covered automatically
 ```
 
-#### Dio
-
-```dart
-final dio = Dio();
-ReplicateInterceptor.addDioInterceptor(dio); // no-op when inactive
-```
-
-#### `dart:io HttpClient`
-
-No additional setup needed. `ReplicateInterceptor.init()` installs a global
-`HttpOverrides` that wraps every `HttpClient` instance automatically.
+That's it. Replicate handles the rest.
 
 ---
 
-## Modes
+## Requirements
 
-| Mode | Network | What happens |
-|------|---------|--------------|
-| `record` | Real | Every request/response saved to tape. Keystore dumped automatically. |
-| `intercept` | Real (except manual entries) | Manual tape entries served locally without network. Outgoing request body can be modified; response status/body can be overridden. |
-| `dump_keystore` | None | Dumps keystore to file and returns. Used by Quick Save. |
-| `restore_only` | None | Restores keystore then stays inactive. Used by Quick Save restore. |
-
-> **Note:** `replay` mode still exists in the package code for backwards compatibility but is no longer triggered by the Replicate macOS app. Session Records use `intercept` mode exclusively.
-
-The mode is set by Replicate via `Documents/replicate_session.json`:
-
-```json
-{"sessionId": "93c8dc3f-...", "mode": "intercept", "restoreKeystore": true}
-```
-
-The `restoreKeystore` field is only present when Replicate has injected a
-keystore file that needs to be restored to the Keychain before the app runs.
-
----
-
-## Secure storage persistence (keystore)
-
-### Problem
-
-`flutter_secure_storage` stores auth tokens in the iOS Keychain, which lives
-outside the app's data container. Replicate's container snapshots don't capture
-Keychain items, so login state is lost on restore.
-
-### Solution
-
-The interceptor can dump all `flutter_secure_storage` entries to a JSON file
-and restore them on the next launch — before auth logic runs.
-
-**On save (Record Session):** The interceptor automatically dumps the keystore
-on `init()` when in record mode. The file (`Documents/replicate_keystore.json`)
-sits alongside the tape files. When Replicate calls `stopRecording()`, it copies
-the keystore file into the snapshot directory. No separate app launch needed.
-
-**On save (Quick Save):** After saving the container, Replicate briefly launches
-the app with `mode: "dump_keystore"`. The interceptor dumps the keystore and
-Replicate copies the file into the snapshot directory. This adds ~2-3 seconds.
-
-**On restore (Session Record):** Replicate writes the keystore file back into
-`Documents/` and sets `restoreKeystore: true` in the session config (intercept
-mode). On `init()`, the interceptor restores Keychain entries, deletes the
-plaintext file, then activates intercept mode.
-
-**On restore (Quick Save):** Same keystore injection, but with
-`mode: "restore_only"`. The interceptor restores Keychain entries then stays
-completely inactive — the app runs normally with no interception.
-
-**If the keystore file is missing or malformed** when `restoreKeystore: true`
-is set, `init()` logs a warning and continues normally — it does not throw or
-block the app from launching. The app will simply start without the restored
-Keychain entries (i.e. logged out).
-
-### Security considerations
-
-- The keystore file contains **plaintext Keychain contents**. This is a
-  dev-only trade-off.
-- All `KeystoreManager` methods are guarded by `assert(!kReleaseMode)` and a
-  runtime `kReleaseMode` check — they are complete no-ops in release builds.
-- The plaintext file is deleted immediately after restore.
-- **Never ship this package in a release build.**
-
-### Simulator-only
-
-This file-based approach requires writing to `Documents/` before app launch,
-which is only possible on the iOS Simulator. Real device support would require
-a different transport mechanism.
-
----
-
-## API reference
-
-```dart
-// Activate the interceptor (call once, first line of main()).
-await ReplicateInterceptor.init();
-
-// Wrap a package:http client.
-http.Client ReplicateInterceptor.wrapHttpClient(http.Client client);
-
-// Attach a Dio interceptor.
-void ReplicateInterceptor.addDioInterceptor(Dio dio);
-
-// Check status.
-bool ReplicateInterceptor.isActive;
-```
-
----
-
-## Binary and multipart body support
-
-Binary request and response bodies are fully supported. The interceptor detects
-the content-type and stores either a UTF-8 string or a base64-encoded string:
-
-| Content-type | Encoding in tape |
-|---|---|
-| `application/json`, `text/*`, `application/xml`, `application/x-www-form-urlencoded` | `"utf8"` |
-| `multipart/form-data`, `image/*`, `application/octet-stream`, everything else | `"base64"` |
-
-`package:http` captures `StreamedRequest` and `MultipartRequest` bodies by
-finalising the stream before forwarding. Dio captures `FormData` by finalising
-to a byte stream. `dart:io` uses the same content-type detection instead of the
-old `<binary N bytes>` placeholder.
-
-Old tape files without `requestBodyEncoding`/`responseBodyEncoding` fields are
-treated as `"utf8"` — full backwards compatibility.
-
-## Known limitations
-
-- **Replay cache miss:** If the app makes a request that wasn't recorded in
-  the tape, the interceptor falls through to the real network.
-- **Web platform:** `dart:io` is not available on the web; this package
-  targets iOS / Android / macOS / Linux / Windows Flutter targets only.
-- **All keystore keys captured:** `flutter_secure_storage` is a flat key-value
-  store shared across the entire app. All keys are dumped, including entries
-  from third-party SDKs. A key prefix filter is a future enhancement.
+- Flutter ≥ 3.0.0
+- iOS Simulator (macOS host)
+- [Replicate](https://canreplicate.app) macOS app

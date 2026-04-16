@@ -2,7 +2,7 @@ name: replicate_interceptor
 description: >
   Flutter interceptor package for the Replicate iOS Simulator developer tool
 version: 0.1.0
-homepage: https://github.com/replicate/replicate_interceptor
+homepage: https://canreplicate.com
 
 environment:
   sdk: ^3.9.2
@@ -11,11 +11,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  # UUID generation for network event IDs
   uuid: ^4.4.0
-  # package:http interceptor support
   http: ^1.2.0
-  # Dio interceptor support
   dio: ^5.7.0
   path_provider: ^2.1.0
   flutter_secure_storage: ^9.2.0
